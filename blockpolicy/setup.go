@@ -39,6 +39,9 @@ func parseConfig(c *caddy.Controller) (*Config, error) {
 
 	for c.Next() {
 		for c.NextBlock() {
+			if c.Val() == "{" {
+				continue
+			}
 			switch c.Val() {
 			case "policy":
 				nameAndPolicy, err := parsePolicy(c)
@@ -102,6 +105,9 @@ func parsePolicy(c *caddy.Controller) (namedPolicy, error) {
 	}
 
 	for c.NextBlock() {
+		if c.Val() == "{" {
+			continue
+		}
 		switch c.Val() {
 		case "allow_groups":
 			p.AllowGroups = append(p.AllowGroups, c.RemainingArgs()...)
@@ -142,6 +148,9 @@ func parseListGroup(c *caddy.Controller) (string, ListGroupConfig, error) {
 	}
 	group := ListGroupConfig{Format: "auto"}
 	for c.NextBlock() {
+		if c.Val() == "{" {
+			continue
+		}
 		switch c.Val() {
 		case "source":
 			vals := c.RemainingArgs()
@@ -168,6 +177,9 @@ func parseListGroup(c *caddy.Controller) (string, ListGroupConfig, error) {
 func parseLoading(c *caddy.Controller) (LoadingConfig, error) {
 	cfg := LoadingConfig{}
 	for c.NextBlock() {
+		if c.Val() == "{" {
+			continue
+		}
 		args := c.RemainingArgs()
 		if len(args) != 1 {
 			return LoadingConfig{}, c.ArgErr()
@@ -207,6 +219,9 @@ func parseLoading(c *caddy.Controller) (LoadingConfig, error) {
 func parseMatching(c *caddy.Controller) (MatchingConfig, error) {
 	cfg := MatchingConfig{}
 	for c.NextBlock() {
+		if c.Val() == "{" {
+			continue
+		}
 		args := c.RemainingArgs()
 		if len(args) != 1 {
 			return MatchingConfig{}, c.ArgErr()

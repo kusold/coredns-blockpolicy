@@ -114,9 +114,11 @@ type metricLabels struct {
 
 func labelValues(ctx context.Context, policy string, w dns.ResponseWriter) metricLabels {
 	zone := "."
-	view := metadata.ValueFunc(ctx, "view/name")
-	if view == "" {
-		view = "default"
+	view := "default"
+	if vf := metadata.ValueFunc(ctx, "view/name"); vf != nil {
+		if v := vf(); v != "" {
+			view = v
+		}
 	}
 	server := "unknown"
 	if w != nil && w.LocalAddr() != nil {
