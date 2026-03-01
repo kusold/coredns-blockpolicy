@@ -7,18 +7,29 @@ const (
 	actionBlock decisionAction = "block"
 )
 
+type QueryType int
+
 const (
-	rcodeSuccess  = 0
-	rcodeNXDomain = 3
-	qtypeA        = 1
-	qtypeAAAA     = 28
+	queryTypeOther QueryType = iota
+	queryTypeA
+	queryTypeAAAA
 )
 
 type Decision struct {
 	Action decisionAction
-	RCode  int
+	Code   decisionCode
 	IP     string
+	Reason string
+	Mode   blockMode
 }
+
+type decisionCode int
+
+const (
+	codePass decisionCode = iota
+	codeNXDomain
+	codeSyntheticIP
+)
 
 type Engine struct {
 	mode  blockMode
@@ -40,25 +51,25 @@ func NewEngine(mode blockMode, allow, deny map[string]struct{}) *Engine {
 	}
 }
 
-func (e *Engine) Evaluate(name string, qtype uint16) Decision {
-	n := normalizeName(name)
+func (e *Engine) Evaluate(name string, qtype QueryType) Decision {
+	n := normalizeQueryName(name)
 	if _, ok := e.allow[n]; ok {
-		return Decision{Action: actionAllow, RCode: rcodeSuccess}
+		return Decision{Action: actionAllow, Code: codePass, Reason: "allowlist"}
 	}
 	if _, ok := e.deny[n]; !ok {
-		return Decision{Action: actionAllow, RCode: rcodeSuccess}
+		return Decision{Action: actionAllow, Code: codePass, Reason: "passthrough"}
 	}
 
 	if e.mode == modeNXDomain {
-		return Decision{Action: actionBlock, RCode: rcodeNXDomain}
+		return Decision{Action: actionBlock, Code: codeNXDomain, Reason: "denylist", Mode: modeNXDomain}
 	}
 
 	switch qtype {
-	case qtypeA:
-		return Decision{Action: actionBlock, RCode: rcodeSuccess, IP: "0.0.0.0"}
-	case qtypeAAAA:
-		return Decision{Action: actionBlock, RCode: rcodeSuccess, IP: "::"}
+	case queryTypeA:
+		return Decision{Action: actionBlock, Code: codeSyntheticIP, IP: "0.0.0.0", Reason: "denylist", Mode: modeZeroIP}
+	case queryTypeAAAA:
+		return Decision{Action: actionBlock, Code: codeSyntheticIP, IP: "::", Reason: "denylist", Mode: modeZeroIP}
 	default:
-		return Decision{Action: actionBlock, RCode: rcodeNXDomain}
+		return Decision{Action: actionBlock, Code: codeNXDomain, Reason: "denylist", Mode: modeZeroIP}
 	}
 }

@@ -28,8 +28,12 @@ type captureWriter struct {
 	msg *dns.Msg
 }
 
-func (c *captureWriter) LocalAddr() net.Addr       { return &net.IPAddr{} }
-func (c *captureWriter) RemoteAddr() net.Addr      { return &net.IPAddr{} }
+func (c *captureWriter) LocalAddr() net.Addr {
+	return &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 53}
+}
+func (c *captureWriter) RemoteAddr() net.Addr {
+	return &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 55300}
+}
 func (c *captureWriter) Close() error              { return nil }
 func (c *captureWriter) TsigStatus() error         { return nil }
 func (c *captureWriter) TsigTimersOnly(bool)       {}
@@ -56,6 +60,13 @@ func TestZeroIPBlocksA(t *testing.T) {
 	}
 	if w.msg == nil || len(w.msg.Answer) != 1 {
 		t.Fatalf("expected one answer")
+	}
+	a, ok := w.msg.Answer[0].(*dns.A)
+	if !ok {
+		t.Fatalf("expected A record answer")
+	}
+	if got := a.A.String(); got != "0.0.0.0" {
+		t.Fatalf("expected 0.0.0.0, got %s", got)
 	}
 	if next.calls.Load() != 0 {
 		t.Fatalf("expected next plugin not to be called")
@@ -106,6 +117,13 @@ func TestZeroIPBlocksAAAA(t *testing.T) {
 	if w.msg == nil || len(w.msg.Answer) != 1 {
 		t.Fatalf("expected one AAAA answer")
 	}
+	aaaa, ok := w.msg.Answer[0].(*dns.AAAA)
+	if !ok {
+		t.Fatalf("expected AAAA answer")
+	}
+	if got := aaaa.AAAA.String(); got != "::" {
+		t.Fatalf("expected ::, got %s", got)
+	}
 }
 
 func TestZeroIPNonAddressTypeReturnsNXDomain(t *testing.T) {
@@ -141,6 +159,43 @@ func TestNXDomainModeAlwaysNXDomain(t *testing.T) {
 	}
 	if rcode != dns.RcodeNameError {
 		t.Fatalf("expected nxdomain rcode, got %d", rcode)
+	}
+}
+
+func TestEmptyQuestionPassesThrough(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{PolicyName: "default", Policy: PolicyConfig{Mode: modeZeroIP, TTL: 60 * time.Second}}
+	next := &noopNext{}
+	bp := New(next, cfg, nil, map[string]struct{}{"ads.example": {}})
+
+	req := new(dns.Msg)
+	w := &captureWriter{}
+
+	_, err := bp.ServeDNS(context.Background(), w, req)
+	if err != nil {
+		t.Fatalf("ServeDNS returned error: %v", err)
+	}
+	if next.calls.Load() != 1 {
+		t.Fatalf("expected next plugin call for empty question")
+	}
+}
+
+func TestUnblockedDomainPassesThrough(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{PolicyName: "default", Policy: PolicyConfig{Mode: modeZeroIP, TTL: 60 * time.Second}}
+	next := &noopNext{}
+	bp := New(next, cfg, nil, map[string]struct{}{"ads.example": {}})
+
+	req := new(dns.Msg)
+	req.SetQuestion("ok.example.", dns.TypeA)
+	w := &captureWriter{}
+
+	_, err := bp.ServeDNS(context.Background(), w, req)
+	if err != nil {
+		t.Fatalf("ServeDNS returned error: %v", err)
+	}
+	if next.calls.Load() != 1 {
+		t.Fatalf("expected next plugin call for unblocked domain")
 	}
 }
 

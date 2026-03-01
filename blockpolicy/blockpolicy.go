@@ -4,10 +4,11 @@ package blockpolicy
 
 import (
 	"context"
-	"fmt"
 	"net"
+	"strconv"
 
 	"github.com/coredns/coredns/plugin"
+	"github.com/coredns/coredns/plugin/metadata"
 	"github.com/miekg/dns"
 )
 
@@ -15,21 +16,16 @@ type BlockPolicy struct {
 	Next plugin.Handler
 
 	policyName string
-	mode       blockMode
 	ttl        uint32
-	allow      map[string]struct{}
-	deny       map[string]struct{}
+	engine     *Engine
 }
 
 func New(next plugin.Handler, cfg *Config, allow, deny map[string]struct{}) *BlockPolicy {
-	registerMetrics()
 	return &BlockPolicy{
 		Next:       next,
 		policyName: cfg.PolicyName,
-		mode:       cfg.Policy.Mode,
 		ttl:        uint32(cfg.Policy.TTL.Seconds()),
-		allow:      allow,
-		deny:       deny,
+		engine:     NewEngine(cfg.Policy.Mode, allow, deny),
 	}
 }
 
@@ -37,66 +33,116 @@ func (b *BlockPolicy) Name() string {
 	return "blockpolicy"
 }
 
-func (b *BlockPolicy) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
-	queriesTotal.WithLabelValues(b.policyName).Inc()
-	if len(r.Question) == 0 {
-		return plugin.NextOrFailure(b.Name(), b.Next, ctx, w, r)
-	}
-
-	q := r.Question[0]
-	name := normalizeName(q.Name)
-	if _, allowed := b.allow[name]; allowed {
-		return plugin.NextOrFailure(b.Name(), b.Next, ctx, w, r)
-	}
-	if _, denied := b.deny[name]; denied {
-		blockedTotal.WithLabelValues(b.policyName, string(b.mode), "denylist").Inc()
-		msg, rcode, err := b.blockResponse(r)
-		if err != nil {
-			return dns.RcodeServerFailure, err
-		}
-		if err := w.WriteMsg(msg); err != nil {
-			return dns.RcodeServerFailure, err
-		}
-		return rcode, nil
-	}
-
-	return plugin.NextOrFailure(b.Name(), b.Next, ctx, w, r)
+func (b *BlockPolicy) Ready() bool {
+	return b.engine != nil
 }
 
-func (b *BlockPolicy) blockResponse(r *dns.Msg) (*dns.Msg, int, error) {
-	q := r.Question[0]
+func (b *BlockPolicy) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
+	labels := labelValues(ctx, b.policyName, w)
 
-	if b.mode == modeNXDomain {
-		m := new(dns.Msg)
-		m.SetReply(r)
-		m.Rcode = dns.RcodeNameError
-		return m, dns.RcodeNameError, nil
+	if len(r.Question) == 0 {
+		queriesTotal.WithLabelValues(labels.server, labels.zone, labels.view, labels.policy, "none").Inc()
+		allowedTotal.WithLabelValues(labels.server, labels.zone, labels.view, labels.policy, "empty_question").Inc()
+		setMetadata(ctx, b.policyName, actionAllow, "empty_question", "")
+		return plugin.NextOrFailure(b.Name(), b.Next, ctx, w, r)
 	}
 
-	// zeroip mode
+	q := r.Question[0]
+	qtype := dns.TypeToString[q.Qtype]
+	queriesTotal.WithLabelValues(labels.server, labels.zone, labels.view, labels.policy, qtype).Inc()
+
+	decision := b.engine.Evaluate(q.Name, queryTypeFromDNS(q.Qtype))
+	if decision.Action == actionAllow {
+		allowedTotal.WithLabelValues(labels.server, labels.zone, labels.view, labels.policy, decision.Reason).Inc()
+		setMetadata(ctx, b.policyName, decision.Action, decision.Reason, "")
+		return plugin.NextOrFailure(b.Name(), b.Next, ctx, w, r)
+	}
+
+	msg := b.blockResponse(r, decision)
+	if err := w.WriteMsg(msg); err != nil {
+		return dns.RcodeServerFailure, err
+	}
+	blockedTotal.WithLabelValues(
+		labels.server,
+		labels.zone,
+		labels.view,
+		labels.policy,
+		decision.Reason,
+		string(decision.Mode),
+		strconv.Itoa(msg.Rcode),
+	).Inc()
+	setMetadata(ctx, b.policyName, decision.Action, decision.Reason, string(decision.Mode))
+	return msg.Rcode, nil
+}
+
+func (b *BlockPolicy) blockResponse(r *dns.Msg, d Decision) *dns.Msg {
+	q := r.Question[0]
+	m := new(dns.Msg)
+	m.SetReply(r)
+
+	if d.Code == codeNXDomain {
+		m.Rcode = dns.RcodeNameError
+		return m
+	}
+
 	switch q.Qtype {
 	case dns.TypeA:
-		m := new(dns.Msg)
-		m.SetReply(r)
-		rr, err := dns.NewRR(fmt.Sprintf("%s %d IN A %s", q.Name, b.ttl, net.IPv4zero.String()))
-		if err != nil {
-			return nil, 0, err
-		}
-		m.Answer = append(m.Answer, rr)
-		return m, dns.RcodeSuccess, nil
+		m.Rcode = dns.RcodeSuccess
+		m.Answer = append(m.Answer, &dns.A{
+			Hdr: dns.RR_Header{Name: q.Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: b.ttl},
+			A:   net.ParseIP(d.IP).To4(),
+		})
 	case dns.TypeAAAA:
-		m := new(dns.Msg)
-		m.SetReply(r)
-		rr, err := dns.NewRR(fmt.Sprintf("%s %d IN AAAA %s", q.Name, b.ttl, net.IPv6zero.String()))
-		if err != nil {
-			return nil, 0, err
-		}
-		m.Answer = append(m.Answer, rr)
-		return m, dns.RcodeSuccess, nil
+		m.Rcode = dns.RcodeSuccess
+		m.Answer = append(m.Answer, &dns.AAAA{
+			Hdr:  dns.RR_Header{Name: q.Name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: b.ttl},
+			AAAA: net.ParseIP(d.IP),
+		})
 	default:
-		m := new(dns.Msg)
-		m.SetReply(r)
 		m.Rcode = dns.RcodeNameError
-		return m, dns.RcodeNameError, nil
 	}
+
+	return m
+}
+
+type metricLabels struct {
+	server string
+	zone   string
+	view   string
+	policy string
+}
+
+func labelValues(ctx context.Context, policy string, w dns.ResponseWriter) metricLabels {
+	zone := "."
+	view := metadata.ValueFunc(ctx, "view/name")
+	if view == "" {
+		view = "default"
+	}
+	server := "unknown"
+	if w != nil && w.LocalAddr() != nil {
+		server = w.LocalAddr().String()
+	}
+	if server == "" {
+		server = "unknown"
+	}
+
+	return metricLabels{server: server, zone: zone, view: view, policy: policy}
+}
+
+func queryTypeFromDNS(t uint16) QueryType {
+	switch t {
+	case dns.TypeA:
+		return queryTypeA
+	case dns.TypeAAAA:
+		return queryTypeAAAA
+	default:
+		return queryTypeOther
+	}
+}
+
+func setMetadata(ctx context.Context, policy string, action decisionAction, reason, mode string) {
+	metadata.SetValueFunc(ctx, "blockpolicy/policy", func() string { return policy })
+	metadata.SetValueFunc(ctx, "blockpolicy/action", func() string { return string(action) })
+	metadata.SetValueFunc(ctx, "blockpolicy/reason", func() string { return reason })
+	metadata.SetValueFunc(ctx, "blockpolicy/mode", func() string { return mode })
 }

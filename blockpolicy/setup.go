@@ -4,6 +4,7 @@ package blockpolicy
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/coredns/caddy"
@@ -40,12 +41,12 @@ func parseConfig(c *caddy.Controller) (*Config, error) {
 		for c.NextBlock() {
 			switch c.Val() {
 			case "policy":
-				nameAndMode, err := parsePolicy(c)
+				nameAndPolicy, err := parsePolicy(c)
 				if err != nil {
 					return nil, err
 				}
-				cfg.PolicyName = nameAndMode.name
-				cfg.Policy = nameAndMode.policy
+				cfg.PolicyName = nameAndPolicy.name
+				cfg.Policy = nameAndPolicy.policy
 			case "use_policy":
 				args := c.RemainingArgs()
 				if len(args) != 1 {
@@ -62,20 +63,24 @@ func parseConfig(c *caddy.Controller) (*Config, error) {
 				}
 				cfg.ListGroups[name] = group
 			case "loading":
-				if err := parseLoading(c); err != nil {
+				loading, err := parseLoading(c)
+				if err != nil {
 					return nil, err
 				}
+				cfg.Loading = loading
 			case "matching":
-				if err := skipBlock(c); err != nil {
+				matching, err := parseMatching(c)
+				if err != nil {
 					return nil, err
 				}
+				cfg.Matching = matching
 			default:
 				return nil, fmt.Errorf("unknown directive %q", c.Val())
 			}
 		}
 	}
 
-	if err := cfg.validate(); err != nil {
+	if err := cfg.applyDefaultsAndValidate(); err != nil {
 		return nil, err
 	}
 	return cfg, nil
@@ -160,25 +165,72 @@ func parseListGroup(c *caddy.Controller) (string, ListGroupConfig, error) {
 	return args[0], group, nil
 }
 
-func parseLoading(c *caddy.Controller) error {
+func parseLoading(c *caddy.Controller) (LoadingConfig, error) {
+	cfg := LoadingConfig{}
 	for c.NextBlock() {
+		args := c.RemainingArgs()
+		if len(args) != 1 {
+			return LoadingConfig{}, c.ArgErr()
+		}
 		switch c.Val() {
-		case "refresh_period", "startup_timeout", "http_timeout", "max_body_size":
-			if len(c.RemainingArgs()) != 1 {
-				return c.ArgErr()
+		case "refresh_period":
+			d, err := time.ParseDuration(args[0])
+			if err != nil {
+				return LoadingConfig{}, fmt.Errorf("invalid refresh_period %q: %w", args[0], err)
 			}
+			cfg.RefreshPeriod = d
+		case "startup_timeout":
+			d, err := time.ParseDuration(args[0])
+			if err != nil {
+				return LoadingConfig{}, fmt.Errorf("invalid startup_timeout %q: %w", args[0], err)
+			}
+			cfg.StartupTimeout = d
+		case "http_timeout":
+			d, err := time.ParseDuration(args[0])
+			if err != nil {
+				return LoadingConfig{}, fmt.Errorf("invalid http_timeout %q: %w", args[0], err)
+			}
+			cfg.HTTPTimeout = d
+		case "max_body_size":
+			sz, err := strconv.ParseInt(args[0], 10, 64)
+			if err != nil {
+				return LoadingConfig{}, fmt.Errorf("invalid max_body_size %q: %w", args[0], err)
+			}
+			cfg.MaxBodySize = sz
 		default:
-			return fmt.Errorf("unknown loading directive %q", c.Val())
+			return LoadingConfig{}, fmt.Errorf("unknown loading directive %q", c.Val())
 		}
 	}
-	return nil
+	return cfg, nil
 }
 
-func skipBlock(c *caddy.Controller) error {
+func parseMatching(c *caddy.Controller) (MatchingConfig, error) {
+	cfg := MatchingConfig{}
 	for c.NextBlock() {
-		if len(c.RemainingArgs()) != 1 {
-			return c.ArgErr()
+		args := c.RemainingArgs()
+		if len(args) != 1 {
+			return MatchingConfig{}, c.ArgErr()
+		}
+		v, err := strconv.ParseBool(args[0])
+		if err != nil {
+			return MatchingConfig{}, fmt.Errorf("invalid bool value for %q: %w", c.Val(), err)
+		}
+		switch c.Val() {
+		case "exact":
+			cfg.Exact = v
+		case "wildcard":
+			cfg.Wildcard = v
+		case "regex":
+			cfg.Regex = v
+		case "hosts_format":
+			cfg.HostsFormat = v
+		case "deep_cname":
+			cfg.DeepCNAME = v
+		case "response_ip_lists":
+			cfg.ResponseIPLists = v
+		default:
+			return MatchingConfig{}, fmt.Errorf("unknown matching directive %q", c.Val())
 		}
 	}
-	return nil
+	return cfg, nil
 }

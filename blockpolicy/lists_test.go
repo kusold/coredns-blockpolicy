@@ -14,6 +14,8 @@ func TestLoadDomainFileParsesDomainAndHosts(t *testing.T) {
 ads.example
 0.0.0.0 tracking.example
 :: another.example
+ads2.example # inline
+0.0.0.0 tracking2.example # inline
 `
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
@@ -24,7 +26,7 @@ ads.example
 		t.Fatalf("loadDomainFile failed: %v", err)
 	}
 
-	for _, want := range []string{"ads.example", "tracking.example", "another.example"} {
+	for _, want := range []string{"ads.example", "tracking.example", "another.example", "ads2.example", "tracking2.example"} {
 		if _, ok := got[want]; !ok {
 			t.Fatalf("expected %q in set", want)
 		}

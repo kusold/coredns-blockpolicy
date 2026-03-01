@@ -221,10 +221,13 @@ v1 targets:
 
 ### Milestone 1: Skeleton + Exact Matching
 
+Status: complete (commit `c9107f5`).
+
 1. Plugin registration, setup parsing, `ServeDNS` scaffolding.
 2. One policy with exact domain deny/allow.
 3. `zeroip` + `nxdomain` response modes.
 4. Basic metrics.
+5. Unit-test baseline for engine/config/list loading (current executable coverage: 86.4%).
 
 ### Milestone 2: List Loading + Refresh
 

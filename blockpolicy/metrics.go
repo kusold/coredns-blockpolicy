@@ -3,30 +3,35 @@
 package blockpolicy
 
 import (
-	"sync"
-
+	"github.com/coredns/coredns/plugin"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
 var (
-	registerMetricsOnce sync.Once
-	queriesTotal        = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "coredns",
+	queriesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: plugin.Namespace,
 		Subsystem: "blockpolicy",
 		Name:      "queries_total",
 		Help:      "Total number of DNS queries evaluated by blockpolicy.",
-	}, []string{"policy"})
+	}, []string{"server", "zone", "view", "policy", "qtype"})
+
 	blockedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "coredns",
+		Namespace: plugin.Namespace,
 		Subsystem: "blockpolicy",
 		Name:      "blocked_total",
 		Help:      "Total number of blocked DNS queries.",
-	}, []string{"policy", "mode", "reason"})
+	}, []string{"server", "zone", "view", "policy", "reason", "mode", "rcode"})
+
+	allowedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: plugin.Namespace,
+		Subsystem: "blockpolicy",
+		Name:      "allowed_total",
+		Help:      "Total number of allowed DNS queries.",
+	}, []string{"server", "zone", "view", "policy", "reason"})
 )
 
-func registerMetrics() {
-	registerMetricsOnce.Do(func() {
-		prometheus.MustRegister(queriesTotal)
-		prometheus.MustRegister(blockedTotal)
-	})
+func init() {
+	prometheus.MustRegister(queriesTotal)
+	prometheus.MustRegister(blockedTotal)
+	prometheus.MustRegister(allowedTotal)
 }

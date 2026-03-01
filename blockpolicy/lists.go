@@ -63,8 +63,8 @@ func loadDomainFile(path string, out map[string]struct{}) error {
 
 	s := bufio.NewScanner(f)
 	for s.Scan() {
-		line := strings.TrimSpace(s.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
+		line := stripInlineComment(strings.TrimSpace(s.Text()))
+		if line == "" {
 			continue
 		}
 		fields := strings.Fields(line)
@@ -75,7 +75,7 @@ func loadDomainFile(path string, out map[string]struct{}) error {
 		// hosts-style line: "0.0.0.0 domain.tld"
 		if ip := net.ParseIP(fields[0]); ip != nil {
 			for i := 1; i < len(fields); i++ {
-				name := normalizeName(fields[i])
+				name := normalizeExactListEntry(fields[i])
 				if name != "" {
 					out[name] = struct{}{}
 				}
@@ -83,7 +83,7 @@ func loadDomainFile(path string, out map[string]struct{}) error {
 			continue
 		}
 
-		name := normalizeName(fields[0])
+		name := normalizeExactListEntry(fields[0])
 		if name != "" {
 			out[name] = struct{}{}
 		}
@@ -93,4 +93,11 @@ func loadDomainFile(path string, out map[string]struct{}) error {
 		return fmt.Errorf("scan %q: %w", path, err)
 	}
 	return nil
+}
+
+func stripInlineComment(line string) string {
+	if idx := strings.Index(line, "#"); idx >= 0 {
+		return strings.TrimSpace(line[:idx])
+	}
+	return line
 }

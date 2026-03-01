@@ -31,6 +31,17 @@ func TestParseConfig(t *testing.T) {
 		}
 		loading {
 			refresh_period 4h
+			startup_timeout 20s
+			http_timeout 5s
+			max_body_size 1024
+		}
+		matching {
+			exact true
+			wildcard false
+			regex false
+			hosts_format true
+			deep_cname true
+			response_ip_lists true
 		}
 	}`
 
@@ -45,6 +56,12 @@ func TestParseConfig(t *testing.T) {
 	}
 	if cfg.Policy.Mode != modeZeroIP {
 		t.Fatalf("expected zeroip mode")
+	}
+	if cfg.Loading.RefreshPeriod.String() != "4h0m0s" {
+		t.Fatalf("unexpected refresh_period: %s", cfg.Loading.RefreshPeriod)
+	}
+	if !cfg.Matching.Exact || cfg.Matching.Wildcard {
+		t.Fatalf("unexpected matching config: %+v", cfg.Matching)
 	}
 }
 
@@ -64,5 +81,32 @@ func TestParseConfigUsePolicyMismatch(t *testing.T) {
 
 	if _, err := parseConfig(c); err == nil {
 		t.Fatalf("expected parseConfig to fail on use_policy mismatch")
+	}
+}
+
+func TestParseConfigUnknownTopLevelDirective(t *testing.T) {
+	t.Parallel()
+	corefile := `blockpolicy {
+		unknown true
+	}`
+
+	c := caddy.NewTestController("dns", corefile)
+	if _, err := parseConfig(c); err == nil {
+		t.Fatalf("expected unknown directive error")
+	}
+}
+
+func TestParsePolicyRequiresDenyGroup(t *testing.T) {
+	t.Parallel()
+	corefile := `blockpolicy {
+		policy default {
+			block_mode zeroip
+		}
+		use_policy default
+	}`
+
+	c := caddy.NewTestController("dns", corefile)
+	if _, err := parseConfig(c); err == nil {
+		t.Fatalf("expected missing deny_groups to fail")
 	}
 }
