@@ -23,7 +23,7 @@ func setup(c *caddy.Controller) error {
 	}
 	loadCtx, cancel := context.WithTimeout(context.Background(), cfg.Loading.StartupTimeout)
 	defer cancel()
-	allow, deny, err := loadExactDomainsWithContext(loadCtx, cfg)
+	allow, deny, err := loadMatcherSetsWithContext(loadCtx, cfg)
 	if err != nil {
 		errorsTotal.WithLabelValues("startup", "load").Inc()
 		return plugin.Error("blockpolicy", err)
@@ -36,7 +36,7 @@ func setup(c *caddy.Controller) error {
 	)
 
 	dnsserver.GetConfig(c).AddPlugin(func(next plugin.Handler) plugin.Handler {
-		handler := New(next, cfg, allow, deny)
+		handler := NewWithMatchers(next, cfg, allow, deny)
 		instancesMu.Lock()
 		instances = append(instances, handler)
 		instancesMu.Unlock()
@@ -130,6 +130,7 @@ func parseTopLevelBlock(c *caddy.Controller, cfg *Config) error {
 				return err
 			}
 			cfg.Matching = matching
+			cfg.matchingConfigured = true
 		case "logging":
 			return fmt.Errorf("logging block not yet supported")
 		default:

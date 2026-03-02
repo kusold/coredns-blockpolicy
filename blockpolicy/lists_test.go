@@ -328,6 +328,88 @@ func TestListEntriesMetricUpdatedFromLoad(t *testing.T) {
 	}
 }
 
+func TestLoadMatcherSetsWithWildcardAndRegex(t *testing.T) {
+	t.Parallel()
+
+	denyFile := writeListFile(t, strings.Join([]string{
+		"exact.blocked.example",
+		"*.wild.blocked.example",
+		"/^ads[0-9]+\\.example$/",
+	}, "\n"))
+
+	cfg := &Config{
+		PolicyName: "default",
+		Policy: PolicyConfig{
+			DenyGroups: []string{"deny"},
+		},
+		ListGroups: map[string]ListGroupConfig{
+			"deny": {Sources: []string{denyFile}, Format: "auto"},
+		},
+	}
+
+	allow, deny, err := loadMatcherSetsWithContext(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("loadMatcherSetsWithContext returned error: %v", err)
+	}
+
+	e := NewEngineWithMatchers(modeZeroIP, allow, deny)
+	for _, q := range []string{"exact.blocked.example.", "sub.wild.blocked.example.", "ads42.example."} {
+		if d := e.Evaluate(q, queryTypeA); d.Action != actionBlock {
+			t.Fatalf("%s: expected blocked, got %q", q, d.Action)
+		}
+	}
+	if d := e.Evaluate("ok.example.", queryTypeA); d.Action != actionAllow {
+		t.Fatalf("expected non-matching domain to be allowed")
+	}
+}
+
+func TestRegexParseErrorsAreSkippedAndCounted(t *testing.T) {
+	before := metricCounterValue(t, errorsTotal.WithLabelValues("parse", "entry"))
+
+	denyFile := writeListFile(t, strings.Join([]string{
+		"not-a-regex-line",
+		"/(invalid/",
+		"/^good[0-9]+\\.example$/",
+	}, "\n"))
+
+	cfg := &Config{
+		PolicyName: "default",
+		Policy: PolicyConfig{
+			DenyGroups: []string{"deny"},
+		},
+		ListGroups: map[string]ListGroupConfig{
+			"deny": {Sources: []string{denyFile}, Format: "regex"},
+		},
+	}
+
+	allow, deny, err := loadMatcherSetsWithContext(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("loadMatcherSetsWithContext returned error: %v", err)
+	}
+
+	after := metricCounterValue(t, errorsTotal.WithLabelValues("parse", "entry"))
+	if after <= before {
+		t.Fatalf("expected parse error counter to increment, before=%v after=%v", before, after)
+	}
+
+	e := NewEngineWithMatchers(modeZeroIP, allow, deny)
+	if d := e.Evaluate("good7.example.", queryTypeA); d.Action != actionBlock {
+		t.Fatalf("expected valid regex entry to block, got %q", d.Action)
+	}
+	if d := e.Evaluate("not-a-regex-line.", queryTypeA); d.Action != actionAllow {
+		t.Fatalf("expected invalid regex line to be ignored, got %q", d.Action)
+	}
+}
+
+func writeListFile(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "list.txt")
+	if err := os.WriteFile(path, []byte(content+"\n"), 0o600); err != nil {
+		t.Fatalf("failed to write list file: %v", err)
+	}
+	return path
+}
+
 func metricGaugeValue(t *testing.T, g interface{ Write(*dto.Metric) error }) float64 {
 	t.Helper()
 	m := &dto.Metric{}

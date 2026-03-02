@@ -37,6 +37,10 @@ type BlockPolicy struct {
 const shutdownWaitTimeout = 5 * time.Second
 
 func New(next plugin.Handler, cfg *Config, allow, deny map[string]struct{}) *BlockPolicy {
+	return NewWithMatchers(next, cfg, matcherSet{exact: allow}, matcherSet{exact: deny})
+}
+
+func NewWithMatchers(next plugin.Handler, cfg *Config, allow, deny matcherSet) *BlockPolicy {
 	b := &BlockPolicy{
 		Next:       next,
 		policyName: cfg.PolicyName,
@@ -47,7 +51,7 @@ func New(next plugin.Handler, cfg *Config, allow, deny map[string]struct{}) *Blo
 		stopCh:        make(chan struct{}),
 		doneCh:        make(chan struct{}),
 	}
-	b.engine.Store(NewEngine(cfg.Policy.Mode, allow, deny))
+	b.engine.Store(NewEngineWithMatchers(cfg.Policy.Mode, allow, deny))
 	if len(cfg.ListGroups) > 0 {
 		b.loader = newListLoader(cfg)
 	}
@@ -171,7 +175,7 @@ func (b *BlockPolicy) refreshOnce() {
 		return
 	}
 
-	b.engine.Store(NewEngine(b.mode, allow, deny))
+	b.engine.Store(NewEngineWithMatchers(b.mode, allow, deny))
 	refreshTotal.WithLabelValues(b.policyName, "success").Inc()
 	refreshTimestamp.WithLabelValues(b.policyName).Set(float64(time.Now().Unix()))
 }

@@ -9,16 +9,28 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
+	"sort"
 	"strings"
 	"sync"
 
 	blockyparsers "github.com/0xERR0R/blocky/lists/parsers"
+	blockytrie "github.com/0xERR0R/blocky/trie"
 	"golang.org/x/sync/errgroup"
 )
 
 var errUnexpectedHTTPStatus = errors.New("unexpected HTTP status code")
 
 func loadExactDomainsWithContext(ctx context.Context, cfg *Config) (map[string]struct{}, map[string]struct{}, error) {
+	loader := newListLoader(cfg)
+	allow, deny, err := loader.load(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	return allow.exact, deny.exact, nil
+}
+
+func loadMatcherSetsWithContext(ctx context.Context, cfg *Config) (matcherSet, matcherSet, error) {
 	loader := newListLoader(cfg)
 	return loader.load(ctx)
 }
@@ -37,39 +49,37 @@ func newListLoader(cfg *Config) *listLoader {
 	}
 }
 
-func (l *listLoader) load(ctx context.Context) (map[string]struct{}, map[string]struct{}, error) {
-	allow := make(map[string]struct{})
-	deny := make(map[string]struct{})
+func (l *listLoader) load(ctx context.Context) (matcherSet, matcherSet, error) {
+	allow := newEntryBuilder()
+	deny := newEntryBuilder()
 
 	for _, groupName := range l.cfg.Policy.AllowGroups {
 		if err := l.loadGroupIntoSet(ctx, groupName, l.cfg.ListGroups[groupName], allow); err != nil {
-			return nil, nil, fmt.Errorf("load allow group %q: %w", groupName, err)
+			return matcherSet{}, matcherSet{}, fmt.Errorf("load allow group %q: %w", groupName, err)
 		}
 	}
 	for _, groupName := range l.cfg.Policy.DenyGroups {
 		if err := l.loadGroupIntoSet(ctx, groupName, l.cfg.ListGroups[groupName], deny); err != nil {
-			return nil, nil, fmt.Errorf("load deny group %q: %w", groupName, err)
+			return matcherSet{}, matcherSet{}, fmt.Errorf("load deny group %q: %w", groupName, err)
 		}
 	}
 
-	return allow, deny, nil
+	return allow.toMatcherSet(), deny.toMatcherSet(), nil
 }
 
-func (l *listLoader) loadGroupIntoSet(ctx context.Context, groupName string, group ListGroupConfig, out map[string]struct{}) error {
-	groupSet := make(map[string]struct{})
+func (l *listLoader) loadGroupIntoSet(ctx context.Context, groupName string, group ListGroupConfig, out *entryBuilder) error {
+	groupSet := newEntryBuilder()
 	var mu sync.Mutex
 	g, groupCtx := errgroup.WithContext(ctx)
 	for _, src := range group.Sources {
 		src := src
 		g.Go(func() error {
-			sourceSet := make(map[string]struct{})
+			sourceSet := newEntryBuilder()
 			if err := l.loadSourceIntoSet(groupCtx, groupName, group.Format, src, sourceSet); err != nil {
 				return err
 			}
 			mu.Lock()
-			for entry := range sourceSet {
-				groupSet[entry] = struct{}{}
-			}
+			groupSet.merge(sourceSet)
 			mu.Unlock()
 			return nil
 		})
@@ -78,22 +88,27 @@ func (l *listLoader) loadGroupIntoSet(ctx context.Context, groupName string, gro
 		return err
 	}
 
-	for entry := range groupSet {
-		out[entry] = struct{}{}
-	}
-	listEntries.WithLabelValues(l.cfg.PolicyName, groupName, "exact").Set(float64(len(groupSet)))
+	out.merge(groupSet)
+	listEntries.WithLabelValues(l.cfg.PolicyName, groupName, "exact").Set(float64(len(groupSet.exact)))
+	listEntries.WithLabelValues(l.cfg.PolicyName, groupName, "wildcard").Set(float64(len(groupSet.wildcard)))
+	listEntries.WithLabelValues(l.cfg.PolicyName, groupName, "regex").Set(float64(len(groupSet.regex)))
 
 	return nil
 }
 
-func (l *listLoader) loadSourceIntoSet(ctx context.Context, groupName, format, src string, out map[string]struct{}) error {
+func (l *listLoader) loadSourceIntoSet(ctx context.Context, groupName, format, src string, out *entryBuilder) error {
 	reader, err := l.openSource(ctx, src)
 	if err != nil {
 		return fmt.Errorf("open source %q for group %q: %w", src, groupName, err)
 	}
 	defer reader.Close()
 
-	if err := parseDomainsWithBlocky(ctx, format, src, reader, out); err != nil {
+	warn := func(err error) {
+		log.Warningf("skip invalid %s entry from %s: %v", format, src, err)
+		errorsTotal.WithLabelValues("parse", "entry").Inc()
+	}
+
+	if err := parseEntriesWithBlocky(ctx, format, reader, out, effectiveMatchingConfig(l.cfg.Matching), warn); err != nil {
 		return fmt.Errorf("parse source %q for group %q: %w", src, groupName, err)
 	}
 	return nil
@@ -125,9 +140,27 @@ func (l *listLoader) openSource(ctx context.Context, src string) (io.ReadCloser,
 	return os.Open(path)
 }
 
-func parseDomainsWithBlocky(ctx context.Context, format, source string, reader io.Reader, out map[string]struct{}) error {
-	warn := func(err error) {
-		log.Warningf("skip invalid %s entry from %s: %v", format, source, err)
+func parseDomainsWithBlocky(ctx context.Context, format, _ string, reader io.Reader, out map[string]struct{}) error {
+	builder := newEntryBuilder()
+	if err := parseEntriesWithBlocky(ctx, format, reader, builder, effectiveMatchingConfig(MatchingConfig{}), nil); err != nil {
+		return err
+	}
+	for entry := range builder.exact {
+		out[entry] = struct{}{}
+	}
+	return nil
+}
+
+func parseEntriesWithBlocky(
+	ctx context.Context,
+	format string,
+	reader io.Reader,
+	out *entryBuilder,
+	matching MatchingConfig,
+	warn func(error),
+) error {
+	if warn == nil {
+		warn = func(error) {}
 	}
 
 	switch format {
@@ -139,7 +172,7 @@ func parseDomainsWithBlocky(ctx context.Context, format, source string, reader i
 				return err
 			}
 			return hosts.ForEach(func(host string) error {
-				addExactEntry(out, host)
+				addListEntry(out, host, matching, warn)
 				return nil
 			})
 		})
@@ -151,9 +184,9 @@ func parseDomainsWithBlocky(ctx context.Context, format, source string, reader i
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			addExactEntry(out, entry.Name)
+			addListEntry(out, entry.Name, matching, warn)
 			for _, alias := range entry.Aliases {
-				addExactEntry(out, alias)
+				addListEntry(out, alias, matching, warn)
 			}
 			return nil
 		})
@@ -165,7 +198,29 @@ func parseDomainsWithBlocky(ctx context.Context, format, source string, reader i
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			addExactEntry(out, entry.String())
+			addListEntry(out, entry.String(), matching, warn)
+			return nil
+		})
+
+	case "wildcard":
+		p := blockyparsers.AllowErrors(blockyparsers.LinesAs[*blockyparsers.WildcardEntry](reader), blockyparsers.NoErrorLimit)
+		p.OnErr(warn)
+		return blockyparsers.ForEach[*blockyparsers.WildcardEntry](ctx, p, func(entry *blockyparsers.WildcardEntry) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			addListEntry(out, entry.String(), matching, warn)
+			return nil
+		})
+
+	case "regex":
+		p := blockyparsers.AllowErrors(blockyparsers.Lines(reader), blockyparsers.NoErrorLimit)
+		p.OnErr(warn)
+		return blockyparsers.ForEach[string](ctx, p, func(entry string) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			addRegexEntry(out, entry, matching.Regex, warn)
 			return nil
 		})
 
@@ -174,12 +229,141 @@ func parseDomainsWithBlocky(ctx context.Context, format, source string, reader i
 	}
 }
 
+func addListEntry(out *entryBuilder, entry string, matching MatchingConfig, warn func(error)) {
+	if isRegexListEntry(entry) {
+		addRegexEntry(out, entry, matching.Regex, warn)
+		return
+	}
+	if strings.Contains(entry, "*") {
+		addWildcardEntry(out, entry, matching.Wildcard, warn)
+		return
+	}
+	if !matching.Exact {
+		return
+	}
+	addExactEntry(out.exact, entry)
+}
+
 func addExactEntry(out map[string]struct{}, entry string) {
 	normalized := normalizeExactListEntry(entry)
 	if normalized == "" || net.ParseIP(normalized) != nil {
 		return
 	}
 	out[normalized] = struct{}{}
+}
+
+func addWildcardEntry(out *entryBuilder, entry string, enabled bool, warn func(error)) {
+	if !enabled {
+		return
+	}
+	normalized, err := normalizeWildcardListEntry(entry)
+	if err != nil {
+		warn(err)
+		return
+	}
+	out.wildcard[normalized] = struct{}{}
+}
+
+func addRegexEntry(out *entryBuilder, entry string, enabled bool, warn func(error)) {
+	if !enabled {
+		return
+	}
+	pattern, err := normalizeRegexListEntry(entry)
+	if err != nil {
+		warn(err)
+		return
+	}
+	if _, ok := out.regex[pattern]; ok {
+		return
+	}
+
+	compiled, err := regexp.Compile(pattern)
+	if err != nil {
+		warn(fmt.Errorf("invalid regex %q: %w", entry, err))
+		return
+	}
+	out.regex[pattern] = compiled
+}
+
+func normalizeWildcardListEntry(entry string) (string, error) {
+	entry = strings.TrimSpace(strings.ToLower(entry))
+	globCount := strings.Count(entry, "*")
+	if globCount == 0 {
+		return "", fmt.Errorf("unsupported wildcard %q: must contain '*'", entry)
+	}
+	if !strings.HasPrefix(entry, "*.") || globCount > 1 {
+		return "", fmt.Errorf("unsupported wildcard %q: must start with '*.' and contain no other '*'", entry)
+	}
+
+	normalized := strings.TrimLeft(entry, "*")
+	normalized = strings.Trim(normalized, ".")
+	if normalized == "" {
+		return "", fmt.Errorf("unsupported wildcard %q: empty wildcard domain", entry)
+	}
+	return normalized, nil
+}
+
+func normalizeRegexListEntry(entry string) (string, error) {
+	entry = strings.TrimSpace(entry)
+	if !isRegexListEntry(entry) {
+		return "", fmt.Errorf("unsupported regex %q: must be enclosed by '/'", entry)
+	}
+	return strings.TrimSpace(entry[1 : len(entry)-1]), nil
+}
+
+func isRegexListEntry(entry string) bool {
+	entry = strings.TrimSpace(entry)
+	return len(entry) >= 2 && strings.HasPrefix(entry, "/") && strings.HasSuffix(entry, "/")
+}
+
+type entryBuilder struct {
+	exact    map[string]struct{}
+	wildcard map[string]struct{}
+	regex    map[string]*regexp.Regexp
+}
+
+func newEntryBuilder() *entryBuilder {
+	return &entryBuilder{
+		exact:    map[string]struct{}{},
+		wildcard: map[string]struct{}{},
+		regex:    map[string]*regexp.Regexp{},
+	}
+}
+
+func (e *entryBuilder) merge(other *entryBuilder) {
+	for entry := range other.exact {
+		e.exact[entry] = struct{}{}
+	}
+	for entry := range other.wildcard {
+		e.wildcard[entry] = struct{}{}
+	}
+	for pattern, compiled := range other.regex {
+		e.regex[pattern] = compiled
+	}
+}
+
+func (e *entryBuilder) toMatcherSet() matcherSet {
+	wildcardTrie := blockytrie.NewTrie(blockytrie.SplitTLD)
+	for entry := range e.wildcard {
+		wildcardTrie.Insert(entry)
+	}
+
+	patterns := make([]string, 0, len(e.regex))
+	for pattern := range e.regex {
+		patterns = append(patterns, pattern)
+	}
+	sort.Strings(patterns)
+
+	compiled := make([]*regexp.Regexp, 0, len(patterns))
+	for _, pattern := range patterns {
+		compiled = append(compiled, e.regex[pattern])
+	}
+
+	return matcherSet{
+		exact:    e.exact,
+		wildcard: wildcardTrie,
+		regex:    compiled,
+	}
 }
 
 func sourcePath(src string) (string, error) {

@@ -51,6 +51,9 @@ func TestConfigValidateSetsDefaults(t *testing.T) {
 	if cfg.Loading.RefreshPeriod != 4*time.Hour {
 		t.Fatalf("expected refresh default 4h, got %s", cfg.Loading.RefreshPeriod)
 	}
+	if !cfg.Matching.Exact || !cfg.Matching.Wildcard || !cfg.Matching.Regex {
+		t.Fatalf("expected matching defaults to enable exact/wildcard/regex, got %+v", cfg.Matching)
+	}
 }
 
 func TestConfigValidateRejectsUnsupportedMode(t *testing.T) {
@@ -112,7 +115,7 @@ func TestNormalizeNames(t *testing.T) {
 	}
 }
 
-func TestConfigValidateRejectsUnsupportedListGroupFormat(t *testing.T) {
+func TestConfigValidateRejectsUnknownListGroupFormat(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{
 		PolicyName: "default",
@@ -122,7 +125,7 @@ func TestConfigValidateRejectsUnsupportedListGroupFormat(t *testing.T) {
 		ListGroups: map[string]ListGroupConfig{
 			"ads": {
 				Sources: []string{"/tmp/ads.txt"},
-				Format:  "regex",
+				Format:  "wat",
 			},
 		},
 	}

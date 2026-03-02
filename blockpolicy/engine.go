@@ -1,5 +1,11 @@
 package blockpolicy
 
+import (
+	"regexp"
+
+	blockytrie "github.com/0xERR0R/blocky/trie"
+)
+
 type decisionAction string
 
 const (
@@ -33,17 +39,15 @@ const (
 
 type Engine struct {
 	mode  blockMode
-	allow map[string]struct{}
-	deny  map[string]struct{}
+	allow matcherSet
+	deny  matcherSet
 }
 
 func NewEngine(mode blockMode, allow, deny map[string]struct{}) *Engine {
-	if allow == nil {
-		allow = map[string]struct{}{}
-	}
-	if deny == nil {
-		deny = map[string]struct{}{}
-	}
+	return NewEngineWithMatchers(mode, matcherSet{exact: allow}, matcherSet{exact: deny})
+}
+
+func NewEngineWithMatchers(mode blockMode, allow, deny matcherSet) *Engine {
 	return &Engine{
 		mode:  mode,
 		allow: allow,
@@ -53,10 +57,10 @@ func NewEngine(mode blockMode, allow, deny map[string]struct{}) *Engine {
 
 func (e *Engine) Evaluate(name string, qtype QueryType) Decision {
 	n := normalizeQueryName(name)
-	if _, ok := e.allow[n]; ok {
+	if e.allow.matches(n) {
 		return Decision{Action: actionAllow, Code: codePass, Reason: "allowlist"}
 	}
-	if _, ok := e.deny[n]; !ok {
+	if !e.deny.matches(n) {
 		return Decision{Action: actionAllow, Code: codePass, Reason: "passthrough"}
 	}
 
@@ -72,4 +76,27 @@ func (e *Engine) Evaluate(name string, qtype QueryType) Decision {
 	default:
 		return Decision{Action: actionBlock, Code: codeNXDomain, Reason: "denylist", Mode: modeZeroIP}
 	}
+}
+
+type matcherSet struct {
+	exact    map[string]struct{}
+	wildcard *blockytrie.Trie
+	regex    []*regexp.Regexp
+}
+
+func (s matcherSet) matches(name string) bool {
+	if len(s.exact) > 0 {
+		if _, ok := s.exact[name]; ok {
+			return true
+		}
+	}
+	if s.wildcard != nil && !s.wildcard.IsEmpty() && s.wildcard.HasParentOf(name) {
+		return true
+	}
+	for _, re := range s.regex {
+		if re.MatchString(name) {
+			return true
+		}
+	}
+	return false
 }

@@ -19,6 +19,8 @@ type Config struct {
 	ListGroups map[string]ListGroupConfig
 	Loading    LoadingConfig
 	Matching   MatchingConfig
+
+	matchingConfigured bool
 }
 
 type PolicyConfig struct {
@@ -84,9 +86,8 @@ func (c *Config) applyDefaultsAndValidate() error {
 		c.Loading.MaxBodySize = 20 * 1024 * 1024
 	}
 
-	if !c.Matching.Exact && !c.Matching.Wildcard && !c.Matching.Regex && !c.Matching.HostsFormat {
-		// Milestone 1 only supports exact matching. Keep others parsed for forward compatibility.
-		c.Matching.Exact = true
+	if !c.matchingConfigured {
+		c.Matching = effectiveMatchingConfig(c.Matching)
 	}
 
 	for name, group := range c.ListGroups {
@@ -95,7 +96,7 @@ func (c *Config) applyDefaultsAndValidate() error {
 			group.Format = "auto"
 		}
 		switch group.Format {
-		case "auto", "hosts", "domain":
+		case "auto", "hosts", "domain", "wildcard", "regex":
 		default:
 			return fmt.Errorf("unsupported list_group %q format %q (not yet supported)", name, group.Format)
 		}
@@ -121,4 +122,18 @@ func normalizeQueryName(name string) string {
 
 func normalizeExactListEntry(name string) string {
 	return normalizeQueryName(name)
+}
+
+func effectiveMatchingConfig(cfg MatchingConfig) MatchingConfig {
+	if cfg != (MatchingConfig{}) {
+		return cfg
+	}
+	return MatchingConfig{
+		Exact:           true,
+		Wildcard:        true,
+		Regex:           true,
+		HostsFormat:     true,
+		DeepCNAME:       true,
+		ResponseIPLists: true,
+	}
 }
