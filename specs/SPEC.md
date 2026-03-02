@@ -9,12 +9,13 @@ The plugin is intentionally focused on blocklist features and does not attempt t
 ## 2. Goals
 
 1. Enforce domain blocking policies in CoreDNS with low query-path overhead.
-2. Reuse Blocky-compatible list semantics (exact, wildcard, regex, hosts format).
-3. Support Blocky-style deep checks in v1:
+2. Reuse Blocky parser and trie implementations to avoid reimplementing list parsing and domain index logic.
+3. Reuse Blocky-compatible list semantics (exact, wildcard, regex, hosts format).
+4. Support Blocky-style deep checks in v1:
    1. CNAME chain blocking.
    2. Response-IP blocking.
-4. Support list refresh by interval only (no manual trigger in v1).
-5. Default block mode is `zeroip`.
+5. Support list refresh by interval only (no manual trigger in v1).
+6. Default block mode is `zeroip`.
 
 ## 3. Non-Goals (v1)
 
@@ -23,6 +24,15 @@ The plugin is intentionally focused on blocklist features and does not attempt t
 3. No query logging subsystem.
 4. No upstream routing or resolver-group logic.
 5. No distributed state sync.
+6. No embedding of Blocky as an in-process DNS proxy/resolver runtime; only parser/trie components are reused.
+
+## 3.1 Reuse Contract with Blocky
+
+1. `blockpolicy` must import and use Blocky list parsers (`github.com/0xERR0R/blocky/lists/parsers`) for supported textual list formats.
+2. `blockpolicy` must import and use Blocky trie structures (`github.com/0xERR0R/blocky/trie`) for domain and wildcard index lookups.
+3. Query handling, CoreDNS plugin lifecycle, synthetic response generation, metrics labels, and Corefile parsing remain native to this plugin.
+4. Pin a specific Blocky module version in `go.mod` and upgrade intentionally.
+5. If Blocky parser/trie behavior changes across upgrades, compatibility tests must detect and gate adoption.
 
 ## 4. Core Integration Model
 
@@ -63,7 +73,7 @@ Tradeoff:
 6. Deep CNAME check.
 7. Response-IP list check.
 
-Behavior choice for ambiguous list matching follows Blocky behavior where applicable: first found with warning logging.
+Behavior choice for ambiguous list matching follows Blocky behavior as produced by reused parser/trie components (first found with warning logging where applicable).
 
 ## 7. DNS Response Modes
 
@@ -145,7 +155,7 @@ blockpolicy {
 
 1. `Snapshot` (immutable):
    1. Active policy.
-   2. Compiled match trees/indexes.
+   2. Compiled match trees/indexes backed by Blocky trie structures.
    3. Compiled regex set.
    4. Response-IP structures.
    5. Metadata: build timestamp, source versions, counts.
@@ -153,6 +163,10 @@ blockpolicy {
    1. Atomic pointer to `Snapshot`.
    2. Background refresher.
    3. Metrics collector.
+3. `ListBuild`:
+   1. Parse raw list inputs through Blocky parsers.
+   2. Materialize exact/wildcard indexes through Blocky trie.
+   3. Track parser warnings/errors for metrics and logs.
 
 The query path is read-only against the current snapshot.
 
@@ -234,13 +248,13 @@ Status: complete (commit `c9107f5`).
 ### Milestone 2: List Loading + Refresh
 
 1. File and HTTP(S) list loading.
-2. Parser for `auto`/hosts/domain formats.
+2. Integrate Blocky parsers for `auto`/hosts/domain formats.
 3. Interval refresh and last-good snapshot.
 4. Startup timeout handling.
 
 ### Milestone 3: Wildcards + Regex
 
-1. Wildcard matcher integration.
+1. Integrate Blocky trie wildcard/domain lookup path in query evaluation.
 2. Regex matcher integration.
 3. Parse error handling and metrics.
 
@@ -260,14 +274,16 @@ Status: complete (commit `c9107f5`).
 ## 16. Testing Strategy
 
 1. Unit tests:
-   1. Parser correctness by format.
+   1. Parser correctness by format (via Blocky parsers).
    2. Matching precedence.
    3. Response synthesis per QTYPE and mode.
+   4. Trie lookup correctness (exact + wildcard) via Blocky trie.
 2. Integration tests:
    1. CoreDNS plugin chain behavior.
    2. Interval refresh with successful and failed reloads.
 3. Compatibility tests:
-   1. Golden fixtures comparing expected Blocky-like behavior on selected rules.
+   1. Golden fixtures comparing expected Blocky behavior on selected rules and parser edge-cases.
+   2. Regression checks for Blocky module version upgrades.
 4. Performance tests:
    1. Snapshot swap under load.
    2. Memory and latency at target scales.
