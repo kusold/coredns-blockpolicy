@@ -3,6 +3,7 @@ package blockpolicy
 import (
 	"context"
 	"errors"
+	"net"
 	"sync/atomic"
 
 	"github.com/coredns/coredns/plugin"
@@ -59,3 +60,20 @@ func (n *errorNext) ServeDNS(context.Context, dns.ResponseWriter, *dns.Msg) (int
 var _ plugin.Handler = &noopNext{}
 var _ plugin.Handler = &staticResponseNext{}
 var _ plugin.Handler = &errorNext{}
+
+type noopResponseWriter struct{}
+
+func (*noopResponseWriter) LocalAddr() net.Addr {
+	return &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 53}
+}
+
+func (*noopResponseWriter) RemoteAddr() net.Addr {
+	return &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 55300}
+}
+
+func (*noopResponseWriter) WriteMsg(*dns.Msg) error     { return nil }
+func (*noopResponseWriter) Write(b []byte) (int, error) { return len(b), nil }
+func (*noopResponseWriter) Close() error                { return nil }
+func (*noopResponseWriter) TsigStatus() error           { return nil }
+func (*noopResponseWriter) TsigTimersOnly(bool)         {}
+func (*noopResponseWriter) Hijack()                     {}

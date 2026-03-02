@@ -10,20 +10,10 @@ import (
 )
 
 type captureWriter struct {
+	noopResponseWriter
 	msg *dns.Msg
 }
 
-func (c *captureWriter) LocalAddr() net.Addr {
-	return &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 53}
-}
-func (c *captureWriter) RemoteAddr() net.Addr {
-	return &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 55300}
-}
-func (c *captureWriter) Close() error              { return nil }
-func (c *captureWriter) TsigStatus() error         { return nil }
-func (c *captureWriter) TsigTimersOnly(bool)       {}
-func (c *captureWriter) Hijack()                   {}
-func (c *captureWriter) Write([]byte) (int, error) { return 0, nil }
 func (c *captureWriter) WriteMsg(m *dns.Msg) error { c.msg = m; return nil }
 
 func TestZeroIPBlocksA(t *testing.T) {

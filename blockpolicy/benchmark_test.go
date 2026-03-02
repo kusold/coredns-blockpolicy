@@ -273,6 +273,7 @@ func benchmarkServeDNS(b *testing.B, entries int, mode benchmarkServeDNSMode) {
 }
 
 type benchmarkNextHandler struct {
+	// Dedicated benchmark handler avoids test-helper counters on the hot path.
 	writeReply   bool
 	replyAnswers []benchmarkRRSpec
 }
@@ -341,22 +342,9 @@ func benchmarkDefaultAnswers() []benchmarkRRSpec {
 	}
 }
 
-type benchmarkResponseWriter struct{}
-
-func (*benchmarkResponseWriter) LocalAddr() net.Addr {
-	return &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 53}
+type benchmarkResponseWriter struct {
+	noopResponseWriter
 }
-
-func (*benchmarkResponseWriter) RemoteAddr() net.Addr {
-	return &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 53000}
-}
-
-func (*benchmarkResponseWriter) WriteMsg(*dns.Msg) error     { return nil }
-func (*benchmarkResponseWriter) Write(b []byte) (int, error) { return len(b), nil }
-func (*benchmarkResponseWriter) Close() error                { return nil }
-func (*benchmarkResponseWriter) TsigStatus() error           { return nil }
-func (*benchmarkResponseWriter) TsigTimersOnly(bool)         {}
-func (*benchmarkResponseWriter) Hijack()                     {}
 
 func newDNSRequest(name string, qtype uint16) *dns.Msg {
 	req := new(dns.Msg)

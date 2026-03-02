@@ -58,6 +58,8 @@ func (c *Config) applyDefaultsAndValidate() error {
 	if c.PolicyName == "" {
 		return fmt.Errorf("use_policy is required")
 	}
+	// Keep this check for defense-in-depth: applyDefaultsAndValidate can be
+	// called on programmatically-constructed Config values, not only Corefile parsing.
 	if len(c.Policy.DenyGroups) == 0 {
 		return fmt.Errorf("policy %q requires at least one deny_groups entry", c.PolicyName)
 	}
@@ -66,7 +68,7 @@ func (c *Config) applyDefaultsAndValidate() error {
 		c.Policy.Mode = modeZeroIP
 	}
 	if c.Policy.Mode != modeZeroIP && c.Policy.Mode != modeNXDomain {
-		return fmt.Errorf("unsupported block_mode %q in milestone 1", c.Policy.Mode)
+		return fmt.Errorf("unsupported block_mode %q", c.Policy.Mode)
 	}
 
 	if c.Policy.TTL == 0 {
@@ -105,7 +107,6 @@ func (c *Config) applyDefaultsAndValidate() error {
 		c.Matching = effectiveMatchingConfig(c.Matching)
 	}
 
-	denySources := 0
 	for name, group := range c.ListGroups {
 		if len(group.Sources) == 0 {
 			return fmt.Errorf("list_group %q requires at least one source", name)
@@ -123,9 +124,7 @@ func (c *Config) applyDefaultsAndValidate() error {
 		if group.Format == "" {
 			group.Format = "auto"
 		}
-		switch group.Format {
-		case "auto", "hosts", "domain", "wildcard", "regex":
-		default:
+		if !isSupportedListFormat(group.Format) {
 			return fmt.Errorf("unsupported list_group %q format %q (not yet supported)", name, group.Format)
 		}
 		c.ListGroups[name] = group
@@ -140,10 +139,6 @@ func (c *Config) applyDefaultsAndValidate() error {
 		if _, ok := c.ListGroups[g]; !ok {
 			return fmt.Errorf("deny group %q does not exist", g)
 		}
-		denySources += len(c.ListGroups[g].Sources)
-	}
-	if denySources == 0 {
-		return fmt.Errorf("policy %q requires at least one deny list source", c.PolicyName)
 	}
 	return nil
 }
@@ -167,6 +162,15 @@ func effectiveMatchingConfig(cfg MatchingConfig) MatchingConfig {
 		HostsFormat:     true,
 		DeepCNAME:       true,
 		ResponseIPLists: true,
+	}
+}
+
+func isSupportedListFormat(format string) bool {
+	switch format {
+	case "auto", "hosts", "domain", "wildcard", "regex":
+		return true
+	default:
+		return false
 	}
 }
 

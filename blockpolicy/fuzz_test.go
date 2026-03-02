@@ -15,7 +15,6 @@ func FuzzParseEntriesWithBlocky(f *testing.F) {
 	f.Add("hosts", "127.0.0.1 host.example alias.example\n", true, true, true, true)
 
 	f.Fuzz(func(t *testing.T, format, body string, exact, wildcard, regex, hosts bool) {
-		t.Helper()
 		if len(body) > 1<<16 {
 			t.Skip()
 		}
@@ -48,7 +47,6 @@ func FuzzEngineEvaluate(f *testing.F) {
 	f.Add("/foo/\n10.0.0.1\n", "127.0.0.1\n", "foo.example.", uint8(2), uint8(0))
 
 	f.Fuzz(func(t *testing.T, denyBody, allowBody, query string, qtype, mode uint8) {
-		t.Helper()
 		if len(denyBody) > 1<<16 || len(allowBody) > 1<<16 || len(query) > 512 {
 			t.Skip()
 		}
@@ -70,13 +68,4 @@ func FuzzEngineEvaluate(f *testing.F) {
 		engine := NewEngineWithMatchers(engineMode, allowBuilder.toMatcherSet(), denyBuilder.toMatcherSet())
 		_ = engine.Evaluate(query, QueryType(qtype%3))
 	})
-}
-
-func isSupportedListFormat(format string) bool {
-	switch format {
-	case "auto", "hosts", "domain", "wildcard", "regex":
-		return true
-	default:
-		return false
-	}
 }
