@@ -211,54 +211,79 @@ func (b *BlockPolicy) resolveWithDeepChecks(
 }
 
 func (b *BlockPolicy) evaluateDeepChecks(engine *Engine, answers []dns.RR, qtype QueryType) (Decision, bool) {
-	if b.deepCNAME {
-		start := time.Now()
-		defer func() {
-			matchDuration.WithLabelValues("deep_cname").Observe(time.Since(start).Seconds())
-		}()
-	}
-	if b.responseIP {
-		start := time.Now()
-		defer func() {
-			matchDuration.WithLabelValues("response_ip").Observe(time.Since(start).Seconds())
-		}()
-	}
+	var (
+		deepCNAMEDuration  time.Duration
+		responseIPDuration time.Duration
+	)
+	defer func() {
+		if b.deepCNAME {
+			matchDuration.WithLabelValues("deep_cname").Observe(deepCNAMEDuration.Seconds())
+		}
+		if b.responseIP {
+			matchDuration.WithLabelValues("response_ip").Observe(responseIPDuration.Seconds())
+		}
+	}()
 
 	for _, rr := range answers {
 		if b.deepCNAME {
-			if cname, ok := rr.(*dns.CNAME); ok {
-				target := normalizeQueryName(cname.Target)
-				if target != "" {
-					if engine.allow.matches(target) {
-						continue
-					}
-					if engine.deny.matches(target) {
-						return engine.blockDecision("cname", qtype), true
-					}
-				}
+			decision, blocked, elapsed := evaluateCNAMECheck(engine, rr, qtype)
+			deepCNAMEDuration += elapsed
+			if blocked {
+				return decision, true
 			}
 		}
 
 		if b.responseIP {
-			var ip string
-			switch v := rr.(type) {
-			case *dns.A:
-				ip = v.A.String()
-			case *dns.AAAA:
-				ip = v.AAAA.String()
-			}
-			if ip != "" {
-				if engine.allow.matchesIP(ip) {
-					continue
-				}
-				if engine.deny.matchesIP(ip) {
-					return engine.blockDecision("response_ip", qtype), true
-				}
+			decision, blocked, elapsed := evaluateResponseIPCheck(engine, rr, qtype)
+			responseIPDuration += elapsed
+			if blocked {
+				return decision, true
 			}
 		}
 	}
 
 	return Decision{}, false
+}
+
+func evaluateCNAMECheck(engine *Engine, rr dns.RR, qtype QueryType) (Decision, bool, time.Duration) {
+	cname, ok := rr.(*dns.CNAME)
+	if !ok {
+		return Decision{}, false, 0
+	}
+
+	start := time.Now()
+	target := normalizeQueryName(cname.Target)
+	if target == "" {
+		return Decision{}, false, 0
+	}
+	if engine.allow.matches(target) {
+		return Decision{}, false, time.Since(start)
+	}
+	if engine.deny.matches(target) {
+		return engine.blockDecision("cname", qtype), true, time.Since(start)
+	}
+	return Decision{}, false, time.Since(start)
+}
+
+func evaluateResponseIPCheck(engine *Engine, rr dns.RR, qtype QueryType) (Decision, bool, time.Duration) {
+	var ip string
+	switch v := rr.(type) {
+	case *dns.A:
+		ip = v.A.String()
+	case *dns.AAAA:
+		ip = v.AAAA.String()
+	default:
+		return Decision{}, false, 0
+	}
+
+	start := time.Now()
+	if engine.allow.matchesIP(ip) {
+		return Decision{}, false, time.Since(start)
+	}
+	if engine.deny.matchesIP(ip) {
+		return engine.blockDecision("response_ip", qtype), true, time.Since(start)
+	}
+	return Decision{}, false, time.Since(start)
 }
 
 func (b *BlockPolicy) currentEngine() *Engine {
