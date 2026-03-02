@@ -1,5 +1,3 @@
-//go:build coredns
-
 package blockpolicy
 
 import (
