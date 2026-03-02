@@ -2,6 +2,7 @@ package blockpolicy
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 
 	"github.com/coredns/coredns/plugin"
@@ -40,5 +41,21 @@ func (n *staticResponseNext) ServeDNS(_ context.Context, w dns.ResponseWriter, r
 	return msg.Rcode, nil
 }
 
+type errorNext struct {
+	calls atomic.Int32
+	err   error
+}
+
+func (*errorNext) Name() string { return "error" }
+
+func (n *errorNext) ServeDNS(context.Context, dns.ResponseWriter, *dns.Msg) (int, error) {
+	n.calls.Add(1)
+	if n.err != nil {
+		return dns.RcodeServerFailure, n.err
+	}
+	return dns.RcodeServerFailure, errors.New("forced next error")
+}
+
 var _ plugin.Handler = &noopNext{}
 var _ plugin.Handler = &staticResponseNext{}
+var _ plugin.Handler = &errorNext{}

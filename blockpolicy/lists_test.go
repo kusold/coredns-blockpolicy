@@ -513,6 +513,36 @@ func TestLoadMatcherSetsSkipsExactWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestAddIPEntry(t *testing.T) {
+	t.Parallel()
+
+	got := map[string]struct{}{}
+	if ok := addIPEntry(got, " 2001:0db8:0:0:0:0:0:1 "); !ok {
+		t.Fatalf("expected IPv6 to be accepted")
+	}
+	if _, ok := got["2001:db8::1"]; !ok {
+		t.Fatalf("expected canonicalized IPv6 key")
+	}
+	if ok := addIPEntry(got, "not-an-ip"); ok {
+		t.Fatalf("expected invalid IP to be rejected")
+	}
+}
+
+func TestAddExactEntrySkipsIP(t *testing.T) {
+	t.Parallel()
+
+	got := map[string]struct{}{}
+	addExactEntry(got, "123.145.123.145")
+	addExactEntry(got, "example.com")
+
+	if _, ok := got["123.145.123.145"]; ok {
+		t.Fatalf("expected IP to be skipped from exact domain map")
+	}
+	if _, ok := got["example.com"]; !ok {
+		t.Fatalf("expected domain to be kept in exact map")
+	}
+}
+
 func parseExactEntriesWithBlocky(ctx context.Context, format string, reader io.Reader) (map[string]struct{}, error) {
 	builder := newEntryBuilder()
 	if err := parseEntriesWithBlocky(ctx, format, reader, builder, effectiveMatchingConfig(MatchingConfig{}), nil); err != nil {

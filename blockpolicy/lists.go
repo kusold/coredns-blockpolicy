@@ -230,7 +230,7 @@ func addListEntry(out *entryBuilder, entry string, matching MatchingConfig, warn
 
 func addExactEntry(out map[string]struct{}, entry string) {
 	normalized := normalizeExactListEntry(entry)
-	if normalized == "" {
+	if normalized == "" || net.ParseIP(normalized) != nil {
 		return
 	}
 	out[normalized] = struct{}{}

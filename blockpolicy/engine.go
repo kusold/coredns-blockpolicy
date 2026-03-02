@@ -80,11 +80,11 @@ func (e *Engine) blockDecision(reason string, qtype QueryType) Decision {
 
 	switch qtype {
 	case queryTypeA:
-		return Decision{Action: actionBlock, Code: codeSyntheticIP, IP: "0.0.0.0", Reason: reason, Mode: modeZeroIP}
+		return Decision{Action: actionBlock, Code: codeSyntheticIP, IP: "0.0.0.0", Reason: reason, Mode: e.mode}
 	case queryTypeAAAA:
-		return Decision{Action: actionBlock, Code: codeSyntheticIP, IP: "::", Reason: reason, Mode: modeZeroIP}
+		return Decision{Action: actionBlock, Code: codeSyntheticIP, IP: "::", Reason: reason, Mode: e.mode}
 	default:
-		return Decision{Action: actionBlock, Code: codeNXDomain, Reason: reason, Mode: modeZeroIP}
+		return Decision{Action: actionBlock, Code: codeNXDomain, Reason: reason, Mode: e.mode}
 	}
 }
 

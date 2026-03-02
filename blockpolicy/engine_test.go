@@ -111,3 +111,14 @@ func TestEngineRegexMatchingAndAllowlistPrecedence(t *testing.T) {
 		t.Fatalf("expected deny regex to block, got %q", blocked.Action)
 	}
 }
+
+func TestEngineBlockDecisionUsesConfiguredMode(t *testing.T) {
+	t.Parallel()
+
+	e := NewEngine(blockMode("refused"), nil, map[string]struct{}{"ads.example": {}})
+	d := e.Evaluate("ads.example.", queryTypeA)
+
+	if d.Mode != blockMode("refused") {
+		t.Fatalf("expected decision mode to match engine mode, got %q", d.Mode)
+	}
+}
