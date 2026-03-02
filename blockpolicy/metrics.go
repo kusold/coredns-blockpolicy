@@ -3,6 +3,8 @@
 package blockpolicy
 
 import (
+	"fmt"
+
 	"github.com/coredns/coredns/plugin"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -31,7 +33,21 @@ var (
 )
 
 func init() {
-	prometheus.MustRegister(queriesTotal)
-	prometheus.MustRegister(blockedTotal)
-	prometheus.MustRegister(allowedTotal)
+	mustRegisterOrReuseCounterVec(&queriesTotal)
+	mustRegisterOrReuseCounterVec(&blockedTotal)
+	mustRegisterOrReuseCounterVec(&allowedTotal)
+}
+
+func mustRegisterOrReuseCounterVec(vec **prometheus.CounterVec) {
+	if err := prometheus.Register(*vec); err != nil {
+		if already, ok := err.(prometheus.AlreadyRegisteredError); ok {
+			existing, ok := already.ExistingCollector.(*prometheus.CounterVec)
+			if !ok {
+				panic(fmt.Sprintf("blockpolicy metrics registration type mismatch: %T", already.ExistingCollector))
+			}
+			*vec = existing
+			return
+		}
+		panic(err)
+	}
 }

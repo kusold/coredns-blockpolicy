@@ -77,6 +77,8 @@ func loadDomainFile(path string, out map[string]struct{}) error {
 			for i := 1; i < len(fields); i++ {
 				name := normalizeExactListEntry(fields[i])
 				if name != "" {
+					// In milestone 1, wildcard tokens (e.g. *.example.com) are loaded as
+					// literals and only match exact queries.
 					out[name] = struct{}{}
 				}
 			}
@@ -85,6 +87,8 @@ func loadDomainFile(path string, out map[string]struct{}) error {
 
 		name := normalizeExactListEntry(fields[0])
 		if name != "" {
+			// In milestone 1, wildcard tokens (e.g. *.example.com) are loaded as
+			// literals and only match exact queries.
 			out[name] = struct{}{}
 		}
 	}

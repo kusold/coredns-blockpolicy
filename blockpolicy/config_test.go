@@ -8,9 +8,7 @@ import (
 func TestConfigValidateRequiresUsePolicy(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{
-		Policy: PolicyConfig{
-			DenyGroups: []string{"ads"},
-		},
+		Policy: PolicyConfig{DenyGroups: []string{"ads"}},
 		ListGroups: map[string]ListGroupConfig{
 			"ads": {Sources: []string{"/tmp/ads.txt"}},
 		},
@@ -24,9 +22,7 @@ func TestConfigValidateRejectsUnknownGroup(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{
 		PolicyName: "default",
-		Policy: PolicyConfig{
-			DenyGroups: []string{"missing"},
-		},
+		Policy:     PolicyConfig{DenyGroups: []string{"missing"}},
 		ListGroups: map[string]ListGroupConfig{},
 	}
 	if err := cfg.applyDefaultsAndValidate(); err == nil {
@@ -38,9 +34,7 @@ func TestConfigValidateSetsDefaults(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{
 		PolicyName: "default",
-		Policy: PolicyConfig{
-			DenyGroups: []string{"ads"},
-		},
+		Policy:     PolicyConfig{DenyGroups: []string{"ads"}},
 		ListGroups: map[string]ListGroupConfig{
 			"ads": {Sources: []string{"/tmp/ads.txt"}},
 		},
@@ -90,6 +84,21 @@ func TestConfigValidateRejectsNegativeTTL(t *testing.T) {
 	}
 	if err := cfg.applyDefaultsAndValidate(); err == nil {
 		t.Fatalf("expected negative ttl to fail validation")
+	}
+}
+
+func TestConfigValidateRejectsTooSmallRefreshPeriod(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{
+		PolicyName: "default",
+		Policy:     PolicyConfig{DenyGroups: []string{"ads"}},
+		Loading:    LoadingConfig{RefreshPeriod: 30 * time.Second},
+		ListGroups: map[string]ListGroupConfig{
+			"ads": {Sources: []string{"/tmp/ads.txt"}},
+		},
+	}
+	if err := cfg.applyDefaultsAndValidate(); err == nil {
+		t.Fatalf("expected refresh_period validation failure")
 	}
 }
 

@@ -199,4 +199,17 @@ func TestUnblockedDomainPassesThrough(t *testing.T) {
 	}
 }
 
+func TestBlockResponseInvalidIP(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{PolicyName: "default", Policy: PolicyConfig{Mode: modeZeroIP, TTL: 60 * time.Second}}
+	bp := New(&noopNext{}, cfg, nil, nil)
+
+	req := new(dns.Msg)
+	req.SetQuestion("ads.example.", dns.TypeA)
+	_, err := bp.blockResponse(req, Decision{Action: actionBlock, Code: codeSyntheticIP, IP: "not-an-ip", Mode: modeZeroIP})
+	if err == nil {
+		t.Fatalf("expected invalid synthetic ip to fail")
+	}
+}
+
 var _ plugin.Handler = &noopNext{}

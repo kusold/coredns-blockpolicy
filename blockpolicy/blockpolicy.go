@@ -4,6 +4,7 @@ package blockpolicy
 
 import (
 	"context"
+	"errors"
 	"net"
 	"strconv"
 
@@ -58,7 +59,10 @@ func (b *BlockPolicy) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns
 		return plugin.NextOrFailure(b.Name(), b.Next, ctx, w, r)
 	}
 
-	msg := b.blockResponse(r, decision)
+	msg, err := b.blockResponse(r, decision)
+	if err != nil {
+		return dns.RcodeServerFailure, err
+	}
 	if err := w.WriteMsg(msg); err != nil {
 		return dns.RcodeServerFailure, err
 	}
@@ -75,34 +79,42 @@ func (b *BlockPolicy) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns
 	return msg.Rcode, nil
 }
 
-func (b *BlockPolicy) blockResponse(r *dns.Msg, d Decision) *dns.Msg {
+func (b *BlockPolicy) blockResponse(r *dns.Msg, d Decision) (*dns.Msg, error) {
 	q := r.Question[0]
 	m := new(dns.Msg)
 	m.SetReply(r)
 
 	if d.Code == codeNXDomain {
 		m.Rcode = dns.RcodeNameError
-		return m
+		return m, nil
 	}
 
 	switch q.Qtype {
 	case dns.TypeA:
+		ip := net.ParseIP(d.IP)
+		if ip == nil || ip.To4() == nil {
+			return nil, errors.New("invalid synthetic IPv4 address")
+		}
 		m.Rcode = dns.RcodeSuccess
 		m.Answer = append(m.Answer, &dns.A{
 			Hdr: dns.RR_Header{Name: q.Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: b.ttl},
-			A:   net.ParseIP(d.IP).To4(),
+			A:   ip.To4(),
 		})
 	case dns.TypeAAAA:
+		ip := net.ParseIP(d.IP)
+		if ip == nil || ip.To16() == nil {
+			return nil, errors.New("invalid synthetic IPv6 address")
+		}
 		m.Rcode = dns.RcodeSuccess
 		m.Answer = append(m.Answer, &dns.AAAA{
 			Hdr:  dns.RR_Header{Name: q.Name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: b.ttl},
-			AAAA: net.ParseIP(d.IP),
+			AAAA: ip,
 		})
 	default:
 		m.Rcode = dns.RcodeNameError
 	}
 
-	return m
+	return m, nil
 }
 
 type metricLabels struct {
@@ -143,6 +155,7 @@ func queryTypeFromDNS(t uint16) QueryType {
 }
 
 func setMetadata(ctx context.Context, policy string, action decisionAction, reason, mode string) {
+	// If the metadata plugin is not present in the CoreDNS chain, SetValueFunc is a no-op.
 	metadata.SetValueFunc(ctx, "blockpolicy/policy", func() string { return policy })
 	metadata.SetValueFunc(ctx, "blockpolicy/action", func() string { return string(action) })
 	metadata.SetValueFunc(ctx, "blockpolicy/reason", func() string { return reason })

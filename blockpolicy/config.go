@@ -71,6 +71,9 @@ func (c *Config) applyDefaultsAndValidate() error {
 	if c.Loading.RefreshPeriod == 0 {
 		c.Loading.RefreshPeriod = 4 * time.Hour
 	}
+	if c.Loading.RefreshPeriod < time.Minute {
+		return fmt.Errorf("refresh_period must be >= 1m")
+	}
 	if c.Loading.StartupTimeout == 0 {
 		c.Loading.StartupTimeout = 30 * time.Second
 	}
