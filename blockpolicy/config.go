@@ -97,7 +97,7 @@ func (c *Config) applyDefaultsAndValidate() error {
 		switch group.Format {
 		case "auto", "hosts", "domain":
 		default:
-			return fmt.Errorf("unsupported list_group %q format %q in milestone 2", name, group.Format)
+			return fmt.Errorf("unsupported list_group %q format %q (not yet supported)", name, group.Format)
 		}
 		c.ListGroups[name] = group
 	}

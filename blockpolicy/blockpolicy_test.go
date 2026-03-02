@@ -3,24 +3,11 @@ package blockpolicy
 import (
 	"context"
 	"net"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/coredns/coredns/plugin"
 	"github.com/miekg/dns"
 )
-
-type noopNext struct {
-	calls atomic.Int32
-}
-
-func (*noopNext) Name() string { return "noop" }
-
-func (n *noopNext) ServeDNS(context.Context, dns.ResponseWriter, *dns.Msg) (int, error) {
-	n.calls.Add(1)
-	return dns.RcodeSuccess, nil
-}
 
 type captureWriter struct {
 	msg *dns.Msg
@@ -209,5 +196,3 @@ func TestBlockResponseInvalidIP(t *testing.T) {
 		t.Fatalf("expected invalid synthetic ip to fail")
 	}
 }
-
-var _ plugin.Handler = &noopNext{}

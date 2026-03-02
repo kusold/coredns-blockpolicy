@@ -25,8 +25,10 @@ func setup(c *caddy.Controller) error {
 	defer cancel()
 	allow, deny, err := loadExactDomainsWithContext(loadCtx, cfg)
 	if err != nil {
+		errorsTotal.WithLabelValues("startup", "load").Inc()
 		return plugin.Error("blockpolicy", err)
 	}
+	refreshTimestamp.WithLabelValues(cfg.PolicyName).Set(float64(time.Now().Unix()))
 
 	var (
 		instancesMu sync.Mutex
@@ -204,7 +206,7 @@ func parseListGroup(c *caddy.Controller) (string, ListGroupConfig, error) {
 		return "", ListGroupConfig{}, c.SyntaxErr("{")
 	}
 
-	group := ListGroupConfig{Format: "auto"}
+	group := ListGroupConfig{}
 	for c.Next() {
 		if c.Val() == "}" {
 			if len(group.Sources) == 0 {

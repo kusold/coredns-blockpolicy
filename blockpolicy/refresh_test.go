@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	dto "github.com/prometheus/client_model/go"
 )
 
 func TestRefreshOnceSwapsSnapshotAndKeepsLastGoodOnFailure(t *testing.T) {
@@ -56,4 +58,29 @@ func TestRefreshOnceSwapsSnapshotAndKeepsLastGoodOnFailure(t *testing.T) {
 	if got := bp.currentEngine().Evaluate("new.example.", queryTypeA); got.Action != actionBlock {
 		t.Fatalf("expected last-good snapshot to remain active after failed refresh")
 	}
+
+	if got := metricCounterValue(t, refreshTotal.WithLabelValues("default", "success")); got < 1 {
+		t.Fatalf("expected successful refresh counter to increment, got %v", got)
+	}
+	if got := metricCounterValue(t, refreshTotal.WithLabelValues("default", "error")); got < 1 {
+		t.Fatalf("expected failed refresh counter to increment, got %v", got)
+	}
+	if got := metricCounterValue(t, errorsTotal.WithLabelValues("refresh", "load")); got < 1 {
+		t.Fatalf("expected refresh load errors counter to increment, got %v", got)
+	}
+	if got := metricGaugeValue(t, refreshTimestamp.WithLabelValues("default")); got <= 0 {
+		t.Fatalf("expected refresh timestamp to be set, got %v", got)
+	}
+}
+
+func metricCounterValue(t *testing.T, c interface{ Write(*dto.Metric) error }) float64 {
+	t.Helper()
+	m := &dto.Metric{}
+	if err := c.Write(m); err != nil {
+		t.Fatalf("failed to read metric: %v", err)
+	}
+	if m.Counter == nil || m.Counter.Value == nil {
+		t.Fatalf("counter metric was not set")
+	}
+	return *m.Counter.Value
 }

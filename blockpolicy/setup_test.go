@@ -69,6 +69,41 @@ func TestParseConfig(t *testing.T) {
 	}
 }
 
+func TestSetupSucceedsWithValidConfig(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	denyFile := filepath.Join(tmp, "deny.txt")
+	if err := os.WriteFile(denyFile, []byte("ads.example\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	corefile := `.:53 {
+		blockpolicy {
+			policy default {
+				deny_groups ads
+				block_mode zeroip
+			}
+			use_policy default
+			list_group ads {
+				source ` + denyFile + `
+				format auto
+			}
+			loading {
+				refresh_period 4h
+				startup_timeout 1s
+				http_timeout 1s
+				max_body_size 1024
+			}
+		}
+	}`
+
+	c := caddy.NewTestController("dns", corefile)
+	if err := setup(c); err != nil {
+		t.Fatalf("expected setup to succeed, got error: %v", err)
+	}
+}
+
 func TestParseConfigUsePolicyMismatch(t *testing.T) {
 	t.Parallel()
 	corefile := `.:53 {
@@ -394,8 +429,14 @@ func TestParseConfigErrors(t *testing.T) {
 func TestSetupFailsWhenInitialLoadExceedsStartupTimeout(t *testing.T) {
 	t.Parallel()
 
+	requestStarted := make(chan struct{}, 1)
+	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(200 * time.Millisecond)
+		select {
+		case requestStarted <- struct{}{}:
+		default:
+		}
+		<-release
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ads.example\n"))
 	}))
@@ -421,7 +462,26 @@ func TestSetupFailsWhenInitialLoadExceedsStartupTimeout(t *testing.T) {
 	}`
 
 	c := caddy.NewTestController("dns", corefile)
-	if err := setup(c); err == nil {
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- setup(c)
+	}()
+
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for list request to start")
+	}
+
+	var err error
+	select {
+	case err = <-errCh:
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for setup to fail")
+	}
+	close(release)
+
+	if err == nil {
 		t.Fatalf("expected setup to fail due to startup timeout")
 	}
 }

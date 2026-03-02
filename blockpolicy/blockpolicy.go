@@ -28,10 +28,13 @@ type BlockPolicy struct {
 
 	startOnce sync.Once
 	stopOnce  sync.Once
-	started   atomic.Bool
+	stateMu   sync.Mutex
+	started   bool
 	stopCh    chan struct{}
 	doneCh    chan struct{}
 }
+
+const shutdownWaitTimeout = 5 * time.Second
 
 func New(next plugin.Handler, cfg *Config, allow, deny map[string]struct{}) *BlockPolicy {
 	b := &BlockPolicy{
@@ -64,14 +67,19 @@ func (b *BlockPolicy) OnStartup() error {
 		return nil
 	}
 	b.startOnce.Do(func() {
-		b.started.Store(true)
+		b.stateMu.Lock()
+		b.started = true
+		b.stateMu.Unlock()
 		go b.refreshLoop()
 	})
 	return nil
 }
 
 func (b *BlockPolicy) OnShutdown() error {
-	if !b.started.Load() {
+	b.stateMu.Lock()
+	started := b.started
+	b.stateMu.Unlock()
+	if !started {
 		return nil
 	}
 	b.stopOnce.Do(func() {
@@ -79,7 +87,8 @@ func (b *BlockPolicy) OnShutdown() error {
 	})
 	select {
 	case <-b.doneCh:
-	case <-time.After(5 * time.Second):
+	case <-time.After(shutdownWaitTimeout):
+		log.Warningf("timed out waiting for refresh loop shutdown after %s", shutdownWaitTimeout)
 	}
 	return nil
 }
@@ -156,11 +165,15 @@ func (b *BlockPolicy) refreshOnce() {
 
 	allow, deny, err := b.loader.load(context.Background())
 	if err != nil {
+		refreshTotal.WithLabelValues(b.policyName, "error").Inc()
+		errorsTotal.WithLabelValues("refresh", "load").Inc()
 		log.Errorf("list refresh failed for policy %q: %v", b.policyName, err)
 		return
 	}
 
 	b.engine.Store(NewEngine(b.mode, allow, deny))
+	refreshTotal.WithLabelValues(b.policyName, "success").Inc()
+	refreshTimestamp.WithLabelValues(b.policyName).Set(float64(time.Now().Unix()))
 }
 
 func (b *BlockPolicy) blockResponse(r *dns.Msg, d Decision) (*dns.Msg, error) {

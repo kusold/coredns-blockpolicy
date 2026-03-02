@@ -1,8 +1,8 @@
 package blockpolicy
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -10,13 +10,13 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 
 	blockyparsers "github.com/0xERR0R/blocky/lists/parsers"
+	"golang.org/x/sync/errgroup"
 )
 
-func loadExactDomains(cfg *Config) (map[string]struct{}, map[string]struct{}, error) {
-	return loadExactDomainsWithContext(context.Background(), cfg)
-}
+var errUnexpectedHTTPStatus = errors.New("unexpected HTTP status code")
 
 func loadExactDomainsWithContext(ctx context.Context, cfg *Config) (map[string]struct{}, map[string]struct{}, error) {
 	loader := newListLoader(cfg)
@@ -56,15 +56,33 @@ func (l *listLoader) load(ctx context.Context) (map[string]struct{}, map[string]
 }
 
 func (l *listLoader) loadGroupIntoSet(ctx context.Context, groupName string, group ListGroupConfig, out map[string]struct{}) error {
-	format := group.Format
-	if format == "" {
-		format = "auto"
-	}
+	groupSet := make(map[string]struct{})
+	var mu sync.Mutex
+	g, groupCtx := errgroup.WithContext(ctx)
 	for _, src := range group.Sources {
-		if err := l.loadSourceIntoSet(ctx, groupName, format, src, out); err != nil {
-			return err
-		}
+		src := src
+		g.Go(func() error {
+			sourceSet := make(map[string]struct{})
+			if err := l.loadSourceIntoSet(groupCtx, groupName, group.Format, src, sourceSet); err != nil {
+				return err
+			}
+			mu.Lock()
+			for entry := range sourceSet {
+				groupSet[entry] = struct{}{}
+			}
+			mu.Unlock()
+			return nil
+		})
 	}
+	if err := g.Wait(); err != nil {
+		return err
+	}
+
+	for entry := range groupSet {
+		out[entry] = struct{}{}
+	}
+	listEntries.WithLabelValues(l.cfg.PolicyName, groupName, "exact").Set(float64(len(groupSet)))
+
 	return nil
 }
 
@@ -87,15 +105,17 @@ func (l *listLoader) openSource(ctx context.Context, src string) (io.ReadCloser,
 		if err != nil {
 			return nil, fmt.Errorf("build request: %w", err)
 		}
+
 		resp, err := l.httpClient.Do(req)
 		if err != nil {
 			return nil, err
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			resp.Body.Close()
-			return nil, fmt.Errorf("unexpected status code %d", resp.StatusCode)
+			return nil, fmt.Errorf("%w: %d", errUnexpectedHTTPStatus, resp.StatusCode)
 		}
-		return limitReaderFromBody(resp.Body, l.cfg.Loading.MaxBodySize)
+
+		return newMaxBodySizeReadCloser(resp.Body, l.cfg.Loading.MaxBodySize), nil
 	}
 
 	path, err := sourcePath(src)
@@ -105,70 +125,61 @@ func (l *listLoader) openSource(ctx context.Context, src string) (io.ReadCloser,
 	return os.Open(path)
 }
 
-func limitReaderFromBody(body io.ReadCloser, maxBodySize int64) (io.ReadCloser, error) {
-	if maxBodySize <= 0 {
-		return body, nil
-	}
-
-	defer body.Close()
-
-	payload, err := io.ReadAll(io.LimitReader(body, maxBodySize+1))
-	if err != nil {
-		return nil, err
-	}
-	if int64(len(payload)) > maxBodySize {
-		return nil, fmt.Errorf("response body exceeds max_body_size (%d bytes)", maxBodySize)
-	}
-
-	return io.NopCloser(bytes.NewReader(payload)), nil
-}
-
 func parseDomainsWithBlocky(ctx context.Context, format, source string, reader io.Reader, out map[string]struct{}) error {
+	warn := func(err error) {
+		log.Warningf("skip invalid %s entry from %s: %v", format, source, err)
+	}
+
 	switch format {
-	case "auto", "hosts":
+	case "auto":
 		p := blockyparsers.AllowErrors(blockyparsers.Hosts(reader), blockyparsers.NoErrorLimit)
-		p.OnErr(func(err error) {
-			log.Warningf("skip invalid %s entry from %s: %v", format, source, err)
-		})
+		p.OnErr(warn)
 		return blockyparsers.ForEach[*blockyparsers.HostsIterator](ctx, p, func(hosts *blockyparsers.HostsIterator) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			return hosts.ForEach(func(host string) error {
-				normalized := normalizeExactListEntry(host)
-				if normalized == "" || net.ParseIP(normalized) != nil {
-					return nil
-				}
-				out[normalized] = struct{}{}
+				addExactEntry(out, host)
 				return nil
 			})
 		})
-	case "domain":
-		p := blockyparsers.AllowErrors(blockyparsers.HostList(reader), blockyparsers.NoErrorLimit)
-		p.OnErr(func(err error) {
-			log.Warningf("skip invalid %s entry from %s: %v", format, source, err)
-		})
-		return blockyparsers.ForEach[*blockyparsers.HostListEntry](ctx, p, func(entry *blockyparsers.HostListEntry) error {
-			normalized := normalizeExactListEntry(entry.String())
-			if normalized == "" || net.ParseIP(normalized) != nil {
-				return nil
+
+	case "hosts":
+		p := blockyparsers.AllowErrors(blockyparsers.HostsFile(reader), blockyparsers.NoErrorLimit)
+		p.OnErr(warn)
+		return blockyparsers.ForEach[*blockyparsers.HostsFileEntry](ctx, p, func(entry *blockyparsers.HostsFileEntry) error {
+			if err := ctx.Err(); err != nil {
+				return err
 			}
-			out[normalized] = struct{}{}
+			addExactEntry(out, entry.Name)
+			for _, alias := range entry.Aliases {
+				addExactEntry(out, alias)
+			}
 			return nil
 		})
+
+	case "domain":
+		p := blockyparsers.AllowErrors(blockyparsers.HostList(reader), blockyparsers.NoErrorLimit)
+		p.OnErr(warn)
+		return blockyparsers.ForEach[*blockyparsers.HostListEntry](ctx, p, func(entry *blockyparsers.HostListEntry) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			addExactEntry(out, entry.String())
+			return nil
+		})
+
 	default:
 		return fmt.Errorf("unsupported format %q", format)
 	}
 }
 
-func loadDomainFile(path string, out map[string]struct{}) error {
-	f, err := os.Open(path)
-	if err != nil {
-		return fmt.Errorf("open %q: %w", path, err)
+func addExactEntry(out map[string]struct{}, entry string) {
+	normalized := normalizeExactListEntry(entry)
+	if normalized == "" || net.ParseIP(normalized) != nil {
+		return
 	}
-	defer f.Close()
-
-	if err := parseDomainsWithBlocky(context.Background(), "auto", path, f, out); err != nil {
-		return fmt.Errorf("scan %q: %w", path, err)
-	}
-	return nil
+	out[normalized] = struct{}{}
 }
 
 func sourcePath(src string) (string, error) {
@@ -183,4 +194,26 @@ func sourcePath(src string) (string, error) {
 		return "", fmt.Errorf("source %q is not a local file path", src)
 	}
 	return src, nil
+}
+
+type maxBodySizeReadCloser struct {
+	io.ReadCloser
+	maxBodySize int64
+	bytesRead   int64
+}
+
+func newMaxBodySizeReadCloser(inner io.ReadCloser, maxBodySize int64) io.ReadCloser {
+	return &maxBodySizeReadCloser{
+		ReadCloser:  inner,
+		maxBodySize: maxBodySize,
+	}
+}
+
+func (r *maxBodySizeReadCloser) Read(p []byte) (int, error) {
+	n, err := r.ReadCloser.Read(p)
+	r.bytesRead += int64(n)
+	if r.maxBodySize > 0 && r.bytesRead > r.maxBodySize {
+		return n, fmt.Errorf("response body exceeds max_body_size (%d bytes)", r.maxBodySize)
+	}
+	return n, err
 }
