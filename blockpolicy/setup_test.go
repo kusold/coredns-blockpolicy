@@ -5,6 +5,7 @@ package blockpolicy
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/coredns/caddy"
@@ -115,5 +116,276 @@ func TestParsePolicyRequiresDenyGroup(t *testing.T) {
 	c := caddy.NewTestController("dns", corefile)
 	if _, err := parseConfig(c); err == nil {
 		t.Fatalf("expected missing deny_groups to fail")
+	}
+}
+
+func TestParseConfigErrors(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		corefile string
+		wantErr  string
+	}{
+		{
+			name: "invalid block mode",
+			corefile: `.:53 {
+				blockpolicy {
+					policy default {
+						deny_groups ads
+						block_mode nope
+					}
+					use_policy default
+					list_group ads {
+						source /tmp/ads.txt
+					}
+				}
+			}`,
+			wantErr: `unsupported block_mode`,
+		},
+		{
+			name: "invalid ttl",
+			corefile: `.:53 {
+				blockpolicy {
+					policy default {
+						deny_groups ads
+						ttl notaduration
+					}
+					use_policy default
+					list_group ads {
+						source /tmp/ads.txt
+					}
+				}
+			}`,
+			wantErr: `invalid ttl`,
+		},
+		{
+			name: "invalid refresh period",
+			corefile: `.:53 {
+				blockpolicy {
+					policy default {
+						deny_groups ads
+					}
+					use_policy default
+					list_group ads {
+						source /tmp/ads.txt
+					}
+					loading {
+						refresh_period nope
+					}
+				}
+			}`,
+			wantErr: `invalid refresh_period`,
+		},
+		{
+			name: "invalid startup timeout",
+			corefile: `.:53 {
+				blockpolicy {
+					policy default {
+						deny_groups ads
+					}
+					use_policy default
+					list_group ads {
+						source /tmp/ads.txt
+					}
+					loading {
+						startup_timeout nope
+					}
+				}
+			}`,
+			wantErr: `invalid startup_timeout`,
+		},
+		{
+			name: "invalid http timeout",
+			corefile: `.:53 {
+				blockpolicy {
+					policy default {
+						deny_groups ads
+					}
+					use_policy default
+					list_group ads {
+						source /tmp/ads.txt
+					}
+					loading {
+						http_timeout nope
+					}
+				}
+			}`,
+			wantErr: `invalid http_timeout`,
+		},
+		{
+			name: "invalid max body size",
+			corefile: `.:53 {
+				blockpolicy {
+					policy default {
+						deny_groups ads
+					}
+					use_policy default
+					list_group ads {
+						source /tmp/ads.txt
+					}
+					loading {
+						max_body_size noint
+					}
+				}
+			}`,
+			wantErr: `invalid max_body_size`,
+		},
+		{
+			name: "invalid matching bool",
+			corefile: `.:53 {
+				blockpolicy {
+					policy default {
+						deny_groups ads
+					}
+					use_policy default
+					list_group ads {
+						source /tmp/ads.txt
+					}
+					matching {
+						exact notabool
+					}
+				}
+			}`,
+			wantErr: `invalid bool value for "exact"`,
+		},
+		{
+			name: "unknown policy directive",
+			corefile: `.:53 {
+				blockpolicy {
+					policy default {
+						deny_groups ads
+						nope true
+					}
+					use_policy default
+					list_group ads {
+						source /tmp/ads.txt
+					}
+				}
+			}`,
+			wantErr: `unknown policy directive`,
+		},
+		{
+			name: "unknown list group directive",
+			corefile: `.:53 {
+				blockpolicy {
+					policy default {
+						deny_groups ads
+					}
+					use_policy default
+					list_group ads {
+						nope true
+					}
+				}
+			}`,
+			wantErr: `unknown list_group directive`,
+		},
+		{
+			name: "unknown loading directive",
+			corefile: `.:53 {
+				blockpolicy {
+					policy default {
+						deny_groups ads
+					}
+					use_policy default
+					list_group ads {
+						source /tmp/ads.txt
+					}
+					loading {
+						nope true
+					}
+				}
+			}`,
+			wantErr: `unknown loading directive`,
+		},
+		{
+			name: "unknown matching directive",
+			corefile: `.:53 {
+				blockpolicy {
+					policy default {
+						deny_groups ads
+					}
+					use_policy default
+					list_group ads {
+						source /tmp/ads.txt
+					}
+					matching {
+						nope true
+					}
+				}
+			}`,
+			wantErr: `unknown matching directive`,
+		},
+		{
+			name: "list group missing source",
+			corefile: `.:53 {
+				blockpolicy {
+					policy default {
+						deny_groups ads
+					}
+					use_policy default
+					list_group ads {
+						format auto
+					}
+				}
+			}`,
+			wantErr: `requires at least one source`,
+		},
+		{
+			name: "empty policy name",
+			corefile: `.:53 {
+				blockpolicy {
+					policy {
+						deny_groups ads
+					}
+					use_policy default
+					list_group ads {
+						source /tmp/ads.txt
+					}
+				}
+			}`,
+			wantErr: `expecting argument`,
+		},
+		{
+			name: "missing closing brace policy",
+			corefile: `.:53 {
+				blockpolicy {
+					policy default {
+						deny_groups ads
+						ttl 30s`,
+			wantErr: `Unexpected EOF`,
+		},
+		{
+			name: "logging unsupported",
+			corefile: `.:53 {
+				blockpolicy {
+					policy default {
+						deny_groups ads
+					}
+					use_policy default
+					list_group ads {
+						source /tmp/ads.txt
+					}
+					logging {
+						blocked true
+					}
+				}
+			}`,
+			wantErr: `logging block not yet supported`,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c := caddy.NewTestController("dns", tt.corefile)
+			_, err := parseConfig(c)
+			if err == nil {
+				t.Fatalf("expected parseConfig to fail")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected error containing %q, got %q", tt.wantErr, err.Error())
+			}
+		})
 	}
 }

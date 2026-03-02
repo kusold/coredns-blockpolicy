@@ -95,6 +95,8 @@ func parseTopLevelBlock(c *caddy.Controller, cfg *Config) error {
 				return err
 			}
 			cfg.Matching = matching
+		case "logging":
+			return fmt.Errorf("logging block not yet supported")
 		default:
 			return fmt.Errorf("unknown directive %q", c.Val())
 		}
@@ -108,10 +110,10 @@ type namedPolicy struct {
 }
 
 func parsePolicy(c *caddy.Controller) (namedPolicy, error) {
-	args := c.RemainingArgs()
-	if len(args) != 1 {
+	if !c.NextArg() {
 		return namedPolicy{}, c.ArgErr()
 	}
+	name := c.Val()
 	if !c.NextArg() {
 		return namedPolicy{}, c.ArgErr()
 	}
@@ -122,7 +124,10 @@ func parsePolicy(c *caddy.Controller) (namedPolicy, error) {
 	p := PolicyConfig{Mode: modeZeroIP, TTL: 60 * time.Second}
 	for c.Next() {
 		if c.Val() == "}" {
-			break
+			if len(p.DenyGroups) == 0 {
+				return namedPolicy{}, fmt.Errorf("policy %q requires at least one deny_groups entry", name)
+			}
+			return namedPolicy{name: name, policy: p}, nil
 		}
 		switch c.Val() {
 		case "allow_groups":
@@ -134,34 +139,31 @@ func parsePolicy(c *caddy.Controller) (namedPolicy, error) {
 			if len(vals) != 1 {
 				return namedPolicy{}, c.ArgErr()
 			}
-			p.Mode = blockMode(vals[0])
-		case "ttl":
-			vals := c.RemainingArgs()
-			if len(vals) != 1 {
-				return namedPolicy{}, c.ArgErr()
+			mode := blockMode(vals[0])
+			switch mode {
+			case modeZeroIP, modeNXDomain:
+				p.Mode = mode
+			default:
+				return namedPolicy{}, fmt.Errorf("unsupported block_mode %q", vals[0])
 			}
-			ttl, err := time.ParseDuration(vals[0])
+		case "ttl":
+			ttl, err := parseDurationDirective(c, "ttl")
 			if err != nil {
-				return namedPolicy{}, fmt.Errorf("invalid ttl %q: %w", vals[0], err)
+				return namedPolicy{}, err
 			}
 			p.TTL = ttl
 		default:
 			return namedPolicy{}, fmt.Errorf("unknown policy directive %q", c.Val())
 		}
 	}
-
-	if len(p.DenyGroups) == 0 {
-		return namedPolicy{}, fmt.Errorf("policy %q requires at least one deny_groups entry", args[0])
-	}
-
-	return namedPolicy{name: args[0], policy: p}, nil
+	return namedPolicy{}, c.EOFErr()
 }
 
 func parseListGroup(c *caddy.Controller) (string, ListGroupConfig, error) {
-	args := c.RemainingArgs()
-	if len(args) != 1 {
+	if !c.NextArg() {
 		return "", ListGroupConfig{}, c.ArgErr()
 	}
+	name := c.Val()
 	if !c.NextArg() {
 		return "", ListGroupConfig{}, c.ArgErr()
 	}
@@ -172,7 +174,10 @@ func parseListGroup(c *caddy.Controller) (string, ListGroupConfig, error) {
 	group := ListGroupConfig{Format: "auto"}
 	for c.Next() {
 		if c.Val() == "}" {
-			break
+			if len(group.Sources) == 0 {
+				return "", ListGroupConfig{}, fmt.Errorf("list_group %q requires at least one source", name)
+			}
+			return name, group, nil
 		}
 		switch c.Val() {
 		case "source":
@@ -191,10 +196,7 @@ func parseListGroup(c *caddy.Controller) (string, ListGroupConfig, error) {
 			return "", ListGroupConfig{}, fmt.Errorf("unknown list_group directive %q", c.Val())
 		}
 	}
-	if len(group.Sources) == 0 {
-		return "", ListGroupConfig{}, fmt.Errorf("list_group %q requires at least one source", args[0])
-	}
-	return args[0], group, nil
+	return "", ListGroupConfig{}, c.EOFErr()
 }
 
 func parseLoading(c *caddy.Controller) (LoadingConfig, error) {
@@ -208,37 +210,25 @@ func parseLoading(c *caddy.Controller) (LoadingConfig, error) {
 	cfg := LoadingConfig{}
 	for c.Next() {
 		if c.Val() == "}" {
-			break
+			return cfg, nil
 		}
 		switch c.Val() {
 		case "refresh_period":
-			args := c.RemainingArgs()
-			if len(args) != 1 {
-				return LoadingConfig{}, c.ArgErr()
-			}
-			d, err := time.ParseDuration(args[0])
+			d, err := parseDurationDirective(c, "refresh_period")
 			if err != nil {
-				return LoadingConfig{}, fmt.Errorf("invalid refresh_period %q: %w", args[0], err)
+				return LoadingConfig{}, err
 			}
 			cfg.RefreshPeriod = d
 		case "startup_timeout":
-			args := c.RemainingArgs()
-			if len(args) != 1 {
-				return LoadingConfig{}, c.ArgErr()
-			}
-			d, err := time.ParseDuration(args[0])
+			d, err := parseDurationDirective(c, "startup_timeout")
 			if err != nil {
-				return LoadingConfig{}, fmt.Errorf("invalid startup_timeout %q: %w", args[0], err)
+				return LoadingConfig{}, err
 			}
 			cfg.StartupTimeout = d
 		case "http_timeout":
-			args := c.RemainingArgs()
-			if len(args) != 1 {
-				return LoadingConfig{}, c.ArgErr()
-			}
-			d, err := time.ParseDuration(args[0])
+			d, err := parseDurationDirective(c, "http_timeout")
 			if err != nil {
-				return LoadingConfig{}, fmt.Errorf("invalid http_timeout %q: %w", args[0], err)
+				return LoadingConfig{}, err
 			}
 			cfg.HTTPTimeout = d
 		case "max_body_size":
@@ -255,7 +245,7 @@ func parseLoading(c *caddy.Controller) (LoadingConfig, error) {
 			return LoadingConfig{}, fmt.Errorf("unknown loading directive %q", c.Val())
 		}
 	}
-	return cfg, nil
+	return LoadingConfig{}, c.EOFErr()
 }
 
 func parseMatching(c *caddy.Controller) (MatchingConfig, error) {
@@ -269,72 +259,72 @@ func parseMatching(c *caddy.Controller) (MatchingConfig, error) {
 	cfg := MatchingConfig{}
 	for c.Next() {
 		if c.Val() == "}" {
-			break
+			return cfg, nil
 		}
 		switch c.Val() {
 		case "exact":
-			args := c.RemainingArgs()
-			if len(args) != 1 {
-				return MatchingConfig{}, c.ArgErr()
-			}
-			v, err := strconv.ParseBool(args[0])
+			v, err := parseBoolDirective(c, "exact")
 			if err != nil {
-				return MatchingConfig{}, fmt.Errorf("invalid bool value for %q: %w", c.Val(), err)
+				return MatchingConfig{}, err
 			}
 			cfg.Exact = v
 		case "wildcard":
-			args := c.RemainingArgs()
-			if len(args) != 1 {
-				return MatchingConfig{}, c.ArgErr()
-			}
-			v, err := strconv.ParseBool(args[0])
+			v, err := parseBoolDirective(c, "wildcard")
 			if err != nil {
-				return MatchingConfig{}, fmt.Errorf("invalid bool value for %q: %w", c.Val(), err)
+				return MatchingConfig{}, err
 			}
 			cfg.Wildcard = v
 		case "regex":
-			args := c.RemainingArgs()
-			if len(args) != 1 {
-				return MatchingConfig{}, c.ArgErr()
-			}
-			v, err := strconv.ParseBool(args[0])
+			v, err := parseBoolDirective(c, "regex")
 			if err != nil {
-				return MatchingConfig{}, fmt.Errorf("invalid bool value for %q: %w", c.Val(), err)
+				return MatchingConfig{}, err
 			}
 			cfg.Regex = v
 		case "hosts_format":
-			args := c.RemainingArgs()
-			if len(args) != 1 {
-				return MatchingConfig{}, c.ArgErr()
-			}
-			v, err := strconv.ParseBool(args[0])
+			v, err := parseBoolDirective(c, "hosts_format")
 			if err != nil {
-				return MatchingConfig{}, fmt.Errorf("invalid bool value for %q: %w", c.Val(), err)
+				return MatchingConfig{}, err
 			}
 			cfg.HostsFormat = v
 		case "deep_cname":
-			args := c.RemainingArgs()
-			if len(args) != 1 {
-				return MatchingConfig{}, c.ArgErr()
-			}
-			v, err := strconv.ParseBool(args[0])
+			v, err := parseBoolDirective(c, "deep_cname")
 			if err != nil {
-				return MatchingConfig{}, fmt.Errorf("invalid bool value for %q: %w", c.Val(), err)
+				return MatchingConfig{}, err
 			}
 			cfg.DeepCNAME = v
 		case "response_ip_lists":
-			args := c.RemainingArgs()
-			if len(args) != 1 {
-				return MatchingConfig{}, c.ArgErr()
-			}
-			v, err := strconv.ParseBool(args[0])
+			v, err := parseBoolDirective(c, "response_ip_lists")
 			if err != nil {
-				return MatchingConfig{}, fmt.Errorf("invalid bool value for %q: %w", c.Val(), err)
+				return MatchingConfig{}, err
 			}
 			cfg.ResponseIPLists = v
 		default:
 			return MatchingConfig{}, fmt.Errorf("unknown matching directive %q", c.Val())
 		}
 	}
-	return cfg, nil
+	return MatchingConfig{}, c.EOFErr()
+}
+
+func parseBoolDirective(c *caddy.Controller, directive string) (bool, error) {
+	args := c.RemainingArgs()
+	if len(args) != 1 {
+		return false, c.ArgErr()
+	}
+	v, err := strconv.ParseBool(args[0])
+	if err != nil {
+		return false, fmt.Errorf("invalid bool value for %q: %w", directive, err)
+	}
+	return v, nil
+}
+
+func parseDurationDirective(c *caddy.Controller, directive string) (time.Duration, error) {
+	args := c.RemainingArgs()
+	if len(args) != 1 {
+		return 0, c.ArgErr()
+	}
+	d, err := time.ParseDuration(args[0])
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s %q: %w", directive, args[0], err)
+	}
+	return d, nil
 }

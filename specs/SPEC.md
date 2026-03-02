@@ -122,9 +122,10 @@ blockpolicy {
     response_ip_lists true|false # default true
   }
 
+  # reserved for future release (not supported in milestone 1)
   logging {
-    blocked true|false         # default true
-    refresh_errors true|false  # default true
+    blocked true|false
+    refresh_errors true|false
   }
 }
 ```
@@ -138,6 +139,7 @@ blockpolicy {
 5. `sinkhole` mode requires at least one of `sinkhole_ipv4`/`sinkhole_ipv6`.
 6. Unknown directives fail startup.
 7. Invalid regex entries are counted and skipped unless configured as strict in future versions.
+8. `logging` block is reserved and currently rejected with explicit "not yet supported" error.
 
 ## 9. Data Model
 
@@ -180,7 +182,7 @@ The query path is read-only against the current snapshot.
 
 1. `coredns_blockpolicy_queries_total{server,zone,view,policy,qtype}`
 2. `coredns_blockpolicy_blocked_total{server,zone,view,policy,reason,mode,rcode}`
-3. `coredns_blockpolicy_allowed_total{server,zone,view,policy}`
+3. `coredns_blockpolicy_allowed_total{server,zone,view,policy,reason}`
 4. `coredns_blockpolicy_match_duration_seconds{phase}`
 5. `coredns_blockpolicy_list_entries{policy,group,kind}`
 6. `coredns_blockpolicy_refresh_total{policy,result}`
