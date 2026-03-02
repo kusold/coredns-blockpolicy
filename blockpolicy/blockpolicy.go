@@ -20,6 +20,8 @@ type BlockPolicy struct {
 	policyName string
 	ttl        uint32
 	mode       blockMode
+	deepCNAME  bool
+	responseIP bool
 
 	engine atomic.Pointer[Engine]
 
@@ -37,11 +39,18 @@ type BlockPolicy struct {
 const shutdownWaitTimeout = 5 * time.Second
 
 func NewWithMatchers(next plugin.Handler, cfg *Config, allow, deny matcherSet) *BlockPolicy {
+	matching := cfg.Matching
+	if !cfg.matchingConfigured {
+		matching = effectiveMatchingConfig(matching)
+	}
+
 	b := &BlockPolicy{
 		Next:       next,
 		policyName: cfg.PolicyName,
 		ttl:        uint32(cfg.Policy.TTL.Seconds()),
 		mode:       cfg.Policy.Mode,
+		deepCNAME:  matching.DeepCNAME,
+		responseIP: matching.ResponseIPLists,
 
 		refreshPeriod: cfg.Loading.RefreshPeriod,
 		stopCh:        make(chan struct{}),
@@ -108,13 +117,36 @@ func (b *BlockPolicy) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns
 	queriesTotal.WithLabelValues(labels.server, labels.zone, labels.view, labels.policy, qtype).Inc()
 
 	engine := b.currentEngine()
-	decision := engine.Evaluate(q.Name, queryTypeFromDNS(q.Qtype))
-	if decision.Action == actionAllow {
+	queryType := queryTypeFromDNS(q.Qtype)
+	decision := engine.Evaluate(q.Name, queryType)
+	if decision.Action == actionAllow && decision.Reason == "allowlist" {
+		allowedTotal.WithLabelValues(labels.server, labels.zone, labels.view, labels.policy, decision.Reason).Inc()
+		setMetadata(ctx, b.policyName, decision.Action, decision.Reason, "")
+		return plugin.NextOrFailure(b.Name(), b.Next, ctx, w, r)
+	}
+	if decision.Action == actionAllow && !(b.deepCNAME || b.responseIP) {
 		allowedTotal.WithLabelValues(labels.server, labels.zone, labels.view, labels.policy, decision.Reason).Inc()
 		setMetadata(ctx, b.policyName, decision.Action, decision.Reason, "")
 		return plugin.NextOrFailure(b.Name(), b.Next, ctx, w, r)
 	}
 
+	if decision.Action == actionAllow {
+		finalDecision, rcode, err := b.resolveWithDeepChecks(ctx, w, r, engine, queryType)
+		if err != nil {
+			return rcode, err
+		}
+		if finalDecision.Action == actionAllow {
+			allowedTotal.WithLabelValues(labels.server, labels.zone, labels.view, labels.policy, "passthrough").Inc()
+			setMetadata(ctx, b.policyName, finalDecision.Action, "passthrough", "")
+			return rcode, nil
+		}
+		return b.writeBlocked(ctx, w, r, labels, finalDecision)
+	}
+
+	return b.writeBlocked(ctx, w, r, labels, decision)
+}
+
+func (b *BlockPolicy) writeBlocked(ctx context.Context, w dns.ResponseWriter, r *dns.Msg, labels metricLabels, decision Decision) (int, error) {
 	msg, err := b.blockResponse(r, decision)
 	if err != nil {
 		return dns.RcodeServerFailure, err
@@ -133,6 +165,87 @@ func (b *BlockPolicy) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns
 	).Inc()
 	setMetadata(ctx, b.policyName, decision.Action, decision.Reason, string(decision.Mode))
 	return msg.Rcode, nil
+}
+
+func (b *BlockPolicy) resolveWithDeepChecks(
+	ctx context.Context,
+	w dns.ResponseWriter,
+	r *dns.Msg,
+	engine *Engine,
+	qtype QueryType,
+) (Decision, int, error) {
+	capture := &responseCaptureWriter{ResponseWriter: w}
+	rcode, err := plugin.NextOrFailure(b.Name(), b.Next, ctx, capture, r)
+	if err != nil {
+		return Decision{}, rcode, err
+	}
+
+	if capture.msg == nil && len(capture.raw) > 0 {
+		msg := new(dns.Msg)
+		if unpackErr := msg.Unpack(capture.raw); unpackErr == nil {
+			capture.msg = msg
+		}
+	}
+
+	if capture.msg != nil {
+		if d, blocked := b.evaluateDeepChecks(engine, capture.msg.Answer, qtype); blocked {
+			return d, 0, nil
+		}
+
+		if err := w.WriteMsg(capture.msg); err != nil {
+			return Decision{}, dns.RcodeServerFailure, err
+		}
+		return Decision{Action: actionAllow, Code: codePass, Reason: "passthrough"}, capture.msg.Rcode, nil
+	}
+
+	if len(capture.raw) > 0 {
+		if _, err := w.Write(capture.raw); err != nil {
+			return Decision{}, dns.RcodeServerFailure, err
+		}
+	}
+
+	return Decision{Action: actionAllow, Code: codePass, Reason: "passthrough"}, rcode, nil
+}
+
+func (b *BlockPolicy) evaluateDeepChecks(engine *Engine, answers []dns.RR, qtype QueryType) (Decision, bool) {
+	for _, rr := range answers {
+		if b.deepCNAME {
+			if cname, ok := rr.(*dns.CNAME); ok {
+				target := normalizeQueryName(cname.Target)
+				if target != "" {
+					if engine.allow.matches(target) {
+						continue
+					}
+					if engine.deny.matches(target) {
+						return engine.blockDecision("cname", qtype), true
+					}
+				}
+			}
+		}
+
+		if b.responseIP {
+			switch v := rr.(type) {
+			case *dns.A:
+				ip := v.A.String()
+				if engine.allow.matchesIP(ip) {
+					continue
+				}
+				if engine.deny.matchesIP(ip) {
+					return engine.blockDecision("response_ip", qtype), true
+				}
+			case *dns.AAAA:
+				ip := v.AAAA.String()
+				if engine.allow.matchesIP(ip) {
+					continue
+				}
+				if engine.deny.matchesIP(ip) {
+					return engine.blockDecision("response_ip", qtype), true
+				}
+			}
+		}
+	}
+
+	return Decision{}, false
 }
 
 func (b *BlockPolicy) currentEngine() *Engine {
@@ -257,4 +370,24 @@ func setMetadata(ctx context.Context, policy string, action decisionAction, reas
 	metadata.SetValueFunc(ctx, "blockpolicy/action", func() string { return string(action) })
 	metadata.SetValueFunc(ctx, "blockpolicy/reason", func() string { return reason })
 	metadata.SetValueFunc(ctx, "blockpolicy/mode", func() string { return mode })
+}
+
+type responseCaptureWriter struct {
+	dns.ResponseWriter
+	msg *dns.Msg
+	raw []byte
+}
+
+func (w *responseCaptureWriter) WriteMsg(m *dns.Msg) error {
+	if m == nil {
+		w.msg = nil
+		return nil
+	}
+	w.msg = m.Copy()
+	return nil
+}
+
+func (w *responseCaptureWriter) Write(b []byte) (int, error) {
+	w.raw = append(w.raw, b...)
+	return len(b), nil
 }

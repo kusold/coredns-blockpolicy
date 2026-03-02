@@ -83,6 +83,7 @@ func (l *listLoader) loadGroupIntoSet(ctx context.Context, groupName string, gro
 	listEntries.WithLabelValues(l.cfg.PolicyName, groupName, "exact").Set(float64(len(groupSet.exact)))
 	listEntries.WithLabelValues(l.cfg.PolicyName, groupName, "wildcard").Set(float64(len(groupSet.wildcard)))
 	listEntries.WithLabelValues(l.cfg.PolicyName, groupName, "regex").Set(float64(len(groupSet.regex)))
+	listEntries.WithLabelValues(l.cfg.PolicyName, groupName, "ip").Set(float64(len(groupSet.ips)))
 
 	return nil
 }
@@ -218,6 +219,9 @@ func addListEntry(out *entryBuilder, entry string, matching MatchingConfig, warn
 		addWildcardEntry(out, entry, matching.Wildcard, warn)
 		return
 	}
+	if addIPEntry(out.ips, entry) {
+		return
+	}
 	if !matching.Exact {
 		return
 	}
@@ -226,10 +230,19 @@ func addListEntry(out *entryBuilder, entry string, matching MatchingConfig, warn
 
 func addExactEntry(out map[string]struct{}, entry string) {
 	normalized := normalizeExactListEntry(entry)
-	if normalized == "" || net.ParseIP(normalized) != nil {
+	if normalized == "" {
 		return
 	}
 	out[normalized] = struct{}{}
+}
+
+func addIPEntry(out map[string]struct{}, entry string) bool {
+	ip := net.ParseIP(strings.TrimSpace(entry))
+	if ip == nil {
+		return false
+	}
+	out[ip.String()] = struct{}{}
+	return true
 }
 
 func addWildcardEntry(out *entryBuilder, entry string, enabled bool, warn func(error)) {
@@ -300,6 +313,7 @@ type entryBuilder struct {
 	exact    map[string]struct{}
 	wildcard map[string]struct{}
 	regex    map[string]*regexp.Regexp
+	ips      map[string]struct{}
 }
 
 func newEntryBuilder() *entryBuilder {
@@ -307,6 +321,7 @@ func newEntryBuilder() *entryBuilder {
 		exact:    map[string]struct{}{},
 		wildcard: map[string]struct{}{},
 		regex:    map[string]*regexp.Regexp{},
+		ips:      map[string]struct{}{},
 	}
 }
 
@@ -319,6 +334,9 @@ func (e *entryBuilder) merge(other *entryBuilder) {
 	}
 	for pattern, compiled := range other.regex {
 		e.regex[pattern] = compiled
+	}
+	for ip := range other.ips {
+		e.ips[ip] = struct{}{}
 	}
 }
 
@@ -343,6 +361,7 @@ func (e *entryBuilder) toMatcherSet() matcherSet {
 		exact:    e.exact,
 		wildcard: wildcardTrie,
 		regex:    compiled,
+		ips:      e.ips,
 	}
 }
 

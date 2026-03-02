@@ -70,17 +70,21 @@ func (e *Engine) Evaluate(name string, qtype QueryType) Decision {
 		return Decision{Action: actionAllow, Code: codePass, Reason: "passthrough"}
 	}
 
+	return e.blockDecision("denylist", qtype)
+}
+
+func (e *Engine) blockDecision(reason string, qtype QueryType) Decision {
 	if e.mode == modeNXDomain {
-		return Decision{Action: actionBlock, Code: codeNXDomain, Reason: "denylist", Mode: modeNXDomain}
+		return Decision{Action: actionBlock, Code: codeNXDomain, Reason: reason, Mode: modeNXDomain}
 	}
 
 	switch qtype {
 	case queryTypeA:
-		return Decision{Action: actionBlock, Code: codeSyntheticIP, IP: "0.0.0.0", Reason: "denylist", Mode: modeZeroIP}
+		return Decision{Action: actionBlock, Code: codeSyntheticIP, IP: "0.0.0.0", Reason: reason, Mode: modeZeroIP}
 	case queryTypeAAAA:
-		return Decision{Action: actionBlock, Code: codeSyntheticIP, IP: "::", Reason: "denylist", Mode: modeZeroIP}
+		return Decision{Action: actionBlock, Code: codeSyntheticIP, IP: "::", Reason: reason, Mode: modeZeroIP}
 	default:
-		return Decision{Action: actionBlock, Code: codeNXDomain, Reason: "denylist", Mode: modeZeroIP}
+		return Decision{Action: actionBlock, Code: codeNXDomain, Reason: reason, Mode: modeZeroIP}
 	}
 }
 
@@ -88,6 +92,7 @@ type matcherSet struct {
 	exact    map[string]struct{}
 	wildcard *blockytrie.Trie
 	regex    []*regexp.Regexp
+	ips      map[string]struct{}
 }
 
 func (s matcherSet) matches(name string) bool {
@@ -105,4 +110,12 @@ func (s matcherSet) matches(name string) bool {
 		}
 	}
 	return false
+}
+
+func (s matcherSet) matchesIP(ip string) bool {
+	if len(s.ips) == 0 {
+		return false
+	}
+	_, ok := s.ips[ip]
+	return ok
 }
