@@ -1,10 +1,13 @@
 package blockpolicy
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coredns/caddy"
 )
@@ -385,5 +388,40 @@ func TestParseConfigErrors(t *testing.T) {
 				t.Fatalf("expected error containing %q, got %q", tt.wantErr, err.Error())
 			}
 		})
+	}
+}
+
+func TestSetupFailsWhenInitialLoadExceedsStartupTimeout(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ads.example\n"))
+	}))
+	defer srv.Close()
+
+	corefile := `.:53 {
+		blockpolicy {
+			policy default {
+				deny_groups ads
+			}
+			use_policy default
+			list_group ads {
+				source ` + srv.URL + `
+				format auto
+			}
+			loading {
+				refresh_period 4h
+				startup_timeout 50ms
+				http_timeout 1s
+				max_body_size 1024
+			}
+		}
+	}`
+
+	c := caddy.NewTestController("dns", corefile)
+	if err := setup(c); err == nil {
+		t.Fatalf("expected setup to fail due to startup timeout")
 	}
 }

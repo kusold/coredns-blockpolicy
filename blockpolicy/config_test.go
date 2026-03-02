@@ -111,3 +111,23 @@ func TestNormalizeNames(t *testing.T) {
 		t.Fatalf("unexpected normalized list entry: %q", got)
 	}
 }
+
+func TestConfigValidateRejectsUnsupportedListGroupFormat(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{
+		PolicyName: "default",
+		Policy: PolicyConfig{
+			DenyGroups: []string{"ads"},
+		},
+		ListGroups: map[string]ListGroupConfig{
+			"ads": {
+				Sources: []string{"/tmp/ads.txt"},
+				Format:  "regex",
+			},
+		},
+	}
+
+	if err := cfg.applyDefaultsAndValidate(); err == nil {
+		t.Fatalf("expected unsupported list format to fail validation")
+	}
+}

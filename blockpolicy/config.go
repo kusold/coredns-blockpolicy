@@ -89,6 +89,19 @@ func (c *Config) applyDefaultsAndValidate() error {
 		c.Matching.Exact = true
 	}
 
+	for name, group := range c.ListGroups {
+		group.Format = strings.ToLower(strings.TrimSpace(group.Format))
+		if group.Format == "" {
+			group.Format = "auto"
+		}
+		switch group.Format {
+		case "auto", "hosts", "domain":
+		default:
+			return fmt.Errorf("unsupported list_group %q format %q in milestone 2", name, group.Format)
+		}
+		c.ListGroups[name] = group
+	}
+
 	for _, g := range c.Policy.AllowGroups {
 		if _, ok := c.ListGroups[g]; !ok {
 			return fmt.Errorf("allow group %q does not exist", g)

@@ -1,8 +1,10 @@
 package blockpolicy
 
 import (
+	"context"
 	"fmt"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/coredns/caddy"
@@ -19,14 +21,47 @@ func setup(c *caddy.Controller) error {
 	if err != nil {
 		return plugin.Error("blockpolicy", err)
 	}
-	allow, deny, err := loadExactDomains(cfg)
+	loadCtx, cancel := context.WithTimeout(context.Background(), cfg.Loading.StartupTimeout)
+	defer cancel()
+	allow, deny, err := loadExactDomainsWithContext(loadCtx, cfg)
 	if err != nil {
 		return plugin.Error("blockpolicy", err)
 	}
 
+	var (
+		instancesMu sync.Mutex
+		instances   []*BlockPolicy
+	)
+
 	dnsserver.GetConfig(c).AddPlugin(func(next plugin.Handler) plugin.Handler {
-		return New(next, cfg, allow, deny)
+		handler := New(next, cfg, allow, deny)
+		instancesMu.Lock()
+		instances = append(instances, handler)
+		instancesMu.Unlock()
+		return handler
 	})
+
+	c.OnStartup(func() error {
+		instancesMu.Lock()
+		defer instancesMu.Unlock()
+		for _, instance := range instances {
+			if err := instance.OnStartup(); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	c.OnShutdown(func() error {
+		instancesMu.Lock()
+		defer instancesMu.Unlock()
+		for _, instance := range instances {
+			if err := instance.OnShutdown(); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+
 	return nil
 }
 

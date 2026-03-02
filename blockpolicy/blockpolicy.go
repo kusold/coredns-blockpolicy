@@ -5,6 +5,9 @@ import (
 	"errors"
 	"net"
 	"strconv"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/coredns/coredns/plugin"
 	"github.com/coredns/coredns/plugin/metadata"
@@ -16,16 +19,36 @@ type BlockPolicy struct {
 
 	policyName string
 	ttl        uint32
-	engine     *Engine
+	mode       blockMode
+
+	engine atomic.Pointer[Engine]
+
+	loader        *listLoader
+	refreshPeriod time.Duration
+
+	startOnce sync.Once
+	stopOnce  sync.Once
+	started   atomic.Bool
+	stopCh    chan struct{}
+	doneCh    chan struct{}
 }
 
 func New(next plugin.Handler, cfg *Config, allow, deny map[string]struct{}) *BlockPolicy {
-	return &BlockPolicy{
+	b := &BlockPolicy{
 		Next:       next,
 		policyName: cfg.PolicyName,
 		ttl:        uint32(cfg.Policy.TTL.Seconds()),
-		engine:     NewEngine(cfg.Policy.Mode, allow, deny),
+		mode:       cfg.Policy.Mode,
+
+		refreshPeriod: cfg.Loading.RefreshPeriod,
+		stopCh:        make(chan struct{}),
+		doneCh:        make(chan struct{}),
 	}
+	b.engine.Store(NewEngine(cfg.Policy.Mode, allow, deny))
+	if len(cfg.ListGroups) > 0 {
+		b.loader = newListLoader(cfg)
+	}
+	return b
 }
 
 func (b *BlockPolicy) Name() string {
@@ -33,7 +56,32 @@ func (b *BlockPolicy) Name() string {
 }
 
 func (b *BlockPolicy) Ready() bool {
-	return b.engine != nil
+	return b.engine.Load() != nil
+}
+
+func (b *BlockPolicy) OnStartup() error {
+	if b.loader == nil || b.refreshPeriod <= 0 {
+		return nil
+	}
+	b.startOnce.Do(func() {
+		b.started.Store(true)
+		go b.refreshLoop()
+	})
+	return nil
+}
+
+func (b *BlockPolicy) OnShutdown() error {
+	if !b.started.Load() {
+		return nil
+	}
+	b.stopOnce.Do(func() {
+		close(b.stopCh)
+	})
+	select {
+	case <-b.doneCh:
+	case <-time.After(5 * time.Second):
+	}
+	return nil
 }
 
 func (b *BlockPolicy) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
@@ -50,7 +98,8 @@ func (b *BlockPolicy) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns
 	qtype := dns.TypeToString[q.Qtype]
 	queriesTotal.WithLabelValues(labels.server, labels.zone, labels.view, labels.policy, qtype).Inc()
 
-	decision := b.engine.Evaluate(q.Name, queryTypeFromDNS(q.Qtype))
+	engine := b.currentEngine()
+	decision := engine.Evaluate(q.Name, queryTypeFromDNS(q.Qtype))
 	if decision.Action == actionAllow {
 		allowedTotal.WithLabelValues(labels.server, labels.zone, labels.view, labels.policy, decision.Reason).Inc()
 		setMetadata(ctx, b.policyName, decision.Action, decision.Reason, "")
@@ -75,6 +124,43 @@ func (b *BlockPolicy) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns
 	).Inc()
 	setMetadata(ctx, b.policyName, decision.Action, decision.Reason, string(decision.Mode))
 	return msg.Rcode, nil
+}
+
+func (b *BlockPolicy) currentEngine() *Engine {
+	engine := b.engine.Load()
+	if engine == nil {
+		return NewEngine(b.mode, nil, nil)
+	}
+	return engine
+}
+
+func (b *BlockPolicy) refreshLoop() {
+	ticker := time.NewTicker(b.refreshPeriod)
+	defer ticker.Stop()
+	defer close(b.doneCh)
+
+	for {
+		select {
+		case <-ticker.C:
+			b.refreshOnce()
+		case <-b.stopCh:
+			return
+		}
+	}
+}
+
+func (b *BlockPolicy) refreshOnce() {
+	if b.loader == nil {
+		return
+	}
+
+	allow, deny, err := b.loader.load(context.Background())
+	if err != nil {
+		log.Errorf("list refresh failed for policy %q: %v", b.policyName, err)
+		return
+	}
+
+	b.engine.Store(NewEngine(b.mode, allow, deny))
 }
 
 func (b *BlockPolicy) blockResponse(r *dns.Msg, d Decision) (*dns.Msg, error) {

@@ -1,9 +1,14 @@
 package blockpolicy
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadDomainFileParsesDomainAndHosts(t *testing.T) {
@@ -44,7 +49,7 @@ func TestSourcePath(t *testing.T) {
 	}
 
 	if _, err := sourcePath("https://example.com/list.txt"); err == nil {
-		t.Fatalf("expected http source to fail in milestone 1")
+		t.Fatalf("expected http source to not be treated as local path")
 	}
 }
 
@@ -84,5 +89,69 @@ func TestLoadExactDomains(t *testing.T) {
 	}
 	if _, ok := deny["deny.example"]; !ok {
 		t.Fatalf("deny set missing expected domain")
+	}
+}
+
+func TestLoadExactDomainsHTTPSource(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("deny.example\n"))
+	}))
+	defer srv.Close()
+
+	cfg := &Config{
+		Policy: PolicyConfig{
+			DenyGroups: []string{"deny"},
+		},
+		ListGroups: map[string]ListGroupConfig{
+			"deny": {
+				Sources: []string{srv.URL},
+				Format:  "auto",
+			},
+		},
+		Loading: LoadingConfig{
+			HTTPTimeout: time.Second,
+			MaxBodySize: 1024,
+		},
+	}
+
+	_, deny, err := loadExactDomainsWithContext(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("loadExactDomainsWithContext returned error: %v", err)
+	}
+	if _, ok := deny["deny.example"]; !ok {
+		t.Fatalf("deny set missing expected domain from HTTP source")
+	}
+}
+
+func TestLoadExactDomainsHTTPSourceMaxBodySize(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(strings.Repeat("deny.example\n", 16)))
+	}))
+	defer srv.Close()
+
+	cfg := &Config{
+		Policy: PolicyConfig{
+			DenyGroups: []string{"deny"},
+		},
+		ListGroups: map[string]ListGroupConfig{
+			"deny": {
+				Sources: []string{srv.URL},
+				Format:  "auto",
+			},
+		},
+		Loading: LoadingConfig{
+			HTTPTimeout: time.Second,
+			MaxBodySize: 8,
+		},
+	}
+
+	if _, _, err := loadExactDomainsWithContext(context.Background(), cfg); err == nil {
+		t.Fatalf("expected loadExactDomainsWithContext to fail on max_body_size")
 	}
 }
