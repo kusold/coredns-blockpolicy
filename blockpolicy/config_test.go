@@ -134,3 +134,65 @@ func TestConfigValidateRejectsUnknownListGroupFormat(t *testing.T) {
 		t.Fatalf("expected unsupported list format to fail validation")
 	}
 }
+
+func TestConfigValidateRejectsNegativeLoadingValues(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		loading LoadingConfig
+	}{
+		{
+			name:    "startup timeout",
+			loading: LoadingConfig{StartupTimeout: -1 * time.Second},
+		},
+		{
+			name:    "http timeout",
+			loading: LoadingConfig{HTTPTimeout: -1 * time.Second},
+		},
+		{
+			name:    "max body size",
+			loading: LoadingConfig{MaxBodySize: -1},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &Config{
+				PolicyName: "default",
+				Policy: PolicyConfig{
+					DenyGroups: []string{"ads"},
+				},
+				ListGroups: map[string]ListGroupConfig{
+					"ads": {
+						Sources: []string{"/tmp/ads.txt"},
+					},
+				},
+				Loading: tt.loading,
+			}
+			if err := cfg.applyDefaultsAndValidate(); err == nil {
+				t.Fatalf("expected negative loading value to fail validation")
+			}
+		})
+	}
+}
+
+func TestConfigValidateRejectsUnsupportedSourceScheme(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{
+		PolicyName: "default",
+		Policy: PolicyConfig{
+			DenyGroups: []string{"ads"},
+		},
+		ListGroups: map[string]ListGroupConfig{
+			"ads": {
+				Sources: []string{"ftp://example.com/list.txt"},
+			},
+		},
+	}
+
+	if err := cfg.applyDefaultsAndValidate(); err == nil {
+		t.Fatalf("expected unsupported source scheme to fail validation")
+	}
+}

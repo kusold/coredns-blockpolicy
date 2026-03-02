@@ -92,18 +92,41 @@ func parseConfig(c *caddy.Controller) (*Config, error) {
 }
 
 func parseTopLevelBlock(c *caddy.Controller, cfg *Config) error {
+	var (
+		seenPolicy    bool
+		seenUsePolicy bool
+		seenLoading   bool
+		seenMatching  bool
+	)
+
 	for c.Next() {
 		switch c.Val() {
 		case "}":
+			if !seenPolicy {
+				return fmt.Errorf("policy block is required")
+			}
+			if !seenUsePolicy {
+				return fmt.Errorf("use_policy is required")
+			}
 			return nil
 		case "policy":
+			if seenPolicy {
+				return fmt.Errorf("policy block may only be declared once")
+			}
 			nameAndPolicy, err := parsePolicy(c)
 			if err != nil {
 				return err
 			}
+			if cfg.PolicyName != "" && cfg.PolicyName != nameAndPolicy.name {
+				return fmt.Errorf("use_policy %q does not match configured policy %q", cfg.PolicyName, nameAndPolicy.name)
+			}
 			cfg.PolicyName = nameAndPolicy.name
 			cfg.Policy = nameAndPolicy.policy
+			seenPolicy = true
 		case "use_policy":
+			if seenUsePolicy {
+				return fmt.Errorf("use_policy may only be declared once")
+			}
 			args := c.RemainingArgs()
 			if len(args) != 1 {
 				return c.ArgErr()
@@ -112,25 +135,37 @@ func parseTopLevelBlock(c *caddy.Controller, cfg *Config) error {
 				return fmt.Errorf("use_policy %q does not match configured policy %q", args[0], cfg.PolicyName)
 			}
 			cfg.PolicyName = args[0]
+			seenUsePolicy = true
 		case "list_group":
 			name, group, err := parseListGroup(c)
 			if err != nil {
 				return err
 			}
+			if _, exists := cfg.ListGroups[name]; exists {
+				return fmt.Errorf("list_group %q defined more than once", name)
+			}
 			cfg.ListGroups[name] = group
 		case "loading":
+			if seenLoading {
+				return fmt.Errorf("loading block may only be declared once")
+			}
 			loading, err := parseLoading(c)
 			if err != nil {
 				return err
 			}
 			cfg.Loading = loading
+			seenLoading = true
 		case "matching":
+			if seenMatching {
+				return fmt.Errorf("matching block may only be declared once")
+			}
 			matching, err := parseMatching(c)
 			if err != nil {
 				return err
 			}
 			cfg.Matching = matching
 			cfg.matchingConfigured = true
+			seenMatching = true
 		case "logging":
 			return fmt.Errorf("logging block not yet supported")
 		default:

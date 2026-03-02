@@ -2,6 +2,7 @@ package blockpolicy
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -57,6 +58,9 @@ func (c *Config) applyDefaultsAndValidate() error {
 	if c.PolicyName == "" {
 		return fmt.Errorf("use_policy is required")
 	}
+	if len(c.Policy.DenyGroups) == 0 {
+		return fmt.Errorf("policy %q requires at least one deny_groups entry", c.PolicyName)
+	}
 
 	if c.Policy.Mode == "" {
 		c.Policy.Mode = modeZeroIP
@@ -81,18 +85,40 @@ func (c *Config) applyDefaultsAndValidate() error {
 	if c.Loading.StartupTimeout == 0 {
 		c.Loading.StartupTimeout = 30 * time.Second
 	}
+	if c.Loading.StartupTimeout < 0 {
+		return fmt.Errorf("startup_timeout must be >= 0")
+	}
 	if c.Loading.HTTPTimeout == 0 {
 		c.Loading.HTTPTimeout = 10 * time.Second
 	}
+	if c.Loading.HTTPTimeout < 0 {
+		return fmt.Errorf("http_timeout must be >= 0")
+	}
 	if c.Loading.MaxBodySize == 0 {
 		c.Loading.MaxBodySize = 20 * 1024 * 1024
+	}
+	if c.Loading.MaxBodySize < 0 {
+		return fmt.Errorf("max_body_size must be >= 0")
 	}
 
 	if !c.matchingConfigured {
 		c.Matching = effectiveMatchingConfig(c.Matching)
 	}
 
+	denySources := 0
 	for name, group := range c.ListGroups {
+		if len(group.Sources) == 0 {
+			return fmt.Errorf("list_group %q requires at least one source", name)
+		}
+		normalizedSources := make([]string, 0, len(group.Sources))
+		for _, source := range group.Sources {
+			normalized, err := normalizeAndValidateSource(source)
+			if err != nil {
+				return fmt.Errorf("invalid source in list_group %q: %w", name, err)
+			}
+			normalizedSources = append(normalizedSources, normalized)
+		}
+		group.Sources = normalizedSources
 		group.Format = strings.ToLower(strings.TrimSpace(group.Format))
 		if group.Format == "" {
 			group.Format = "auto"
@@ -114,6 +140,10 @@ func (c *Config) applyDefaultsAndValidate() error {
 		if _, ok := c.ListGroups[g]; !ok {
 			return fmt.Errorf("deny group %q does not exist", g)
 		}
+		denySources += len(c.ListGroups[g].Sources)
+	}
+	if denySources == 0 {
+		return fmt.Errorf("policy %q requires at least one deny list source", c.PolicyName)
 	}
 	return nil
 }
@@ -138,4 +168,32 @@ func effectiveMatchingConfig(cfg MatchingConfig) MatchingConfig {
 		DeepCNAME:       true,
 		ResponseIPLists: true,
 	}
+}
+
+func normalizeAndValidateSource(source string) (string, error) {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return "", fmt.Errorf("source must not be empty")
+	}
+	if !strings.Contains(source, "://") {
+		return source, nil
+	}
+
+	u, err := url.Parse(source)
+	if err != nil {
+		return "", fmt.Errorf("parse source %q: %w", source, err)
+	}
+	switch u.Scheme {
+	case "http", "https":
+		if u.Host == "" {
+			return "", fmt.Errorf("source %q must include host", source)
+		}
+	case "file":
+		if u.Path == "" {
+			return "", fmt.Errorf("source %q must include path", source)
+		}
+	default:
+		return "", fmt.Errorf("unsupported source scheme %q", u.Scheme)
+	}
+	return source, nil
 }

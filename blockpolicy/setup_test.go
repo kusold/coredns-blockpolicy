@@ -408,6 +408,159 @@ func TestParseConfigErrors(t *testing.T) {
 			}`,
 			wantErr: `logging block not yet supported`,
 		},
+		{
+			name: "missing use policy",
+			corefile: `.:53 {
+				blockpolicy {
+					policy default {
+						deny_groups ads
+					}
+					list_group ads {
+						source /tmp/ads.txt
+					}
+				}
+			}`,
+			wantErr: `use_policy is required`,
+		},
+		{
+			name: "missing policy block",
+			corefile: `.:53 {
+				blockpolicy {
+					use_policy default
+					list_group ads {
+						source /tmp/ads.txt
+					}
+				}
+			}`,
+			wantErr: `policy block is required`,
+		},
+		{
+			name: "duplicate policy block",
+			corefile: `.:53 {
+				blockpolicy {
+					policy default {
+						deny_groups ads
+					}
+					policy default {
+						deny_groups ads
+					}
+					use_policy default
+					list_group ads {
+						source /tmp/ads.txt
+					}
+				}
+			}`,
+			wantErr: `policy block may only be declared once`,
+		},
+		{
+			name: "duplicate use policy",
+			corefile: `.:53 {
+				blockpolicy {
+					policy default {
+						deny_groups ads
+					}
+					use_policy default
+					use_policy default
+					list_group ads {
+						source /tmp/ads.txt
+					}
+				}
+			}`,
+			wantErr: `use_policy may only be declared once`,
+		},
+		{
+			name: "duplicate list group",
+			corefile: `.:53 {
+				blockpolicy {
+					policy default {
+						deny_groups ads
+					}
+					use_policy default
+					list_group ads {
+						source /tmp/ads.txt
+					}
+					list_group ads {
+						source /tmp/ads2.txt
+					}
+				}
+			}`,
+			wantErr: `defined more than once`,
+		},
+		{
+			name: "duplicate loading block",
+			corefile: `.:53 {
+				blockpolicy {
+					policy default {
+						deny_groups ads
+					}
+					use_policy default
+					list_group ads {
+						source /tmp/ads.txt
+					}
+					loading {
+						refresh_period 4h
+					}
+					loading {
+						refresh_period 8h
+					}
+				}
+			}`,
+			wantErr: `loading block may only be declared once`,
+		},
+		{
+			name: "duplicate matching block",
+			corefile: `.:53 {
+				blockpolicy {
+					policy default {
+						deny_groups ads
+					}
+					use_policy default
+					list_group ads {
+						source /tmp/ads.txt
+					}
+					matching {
+						exact true
+					}
+					matching {
+						exact false
+					}
+				}
+			}`,
+			wantErr: `matching block may only be declared once`,
+		},
+		{
+			name: "negative startup timeout",
+			corefile: `.:53 {
+				blockpolicy {
+					policy default {
+						deny_groups ads
+					}
+					use_policy default
+					list_group ads {
+						source /tmp/ads.txt
+					}
+					loading {
+						startup_timeout -1s
+					}
+				}
+			}`,
+			wantErr: `startup_timeout must be >= 0`,
+		},
+		{
+			name: "unsupported source scheme",
+			corefile: `.:53 {
+				blockpolicy {
+					policy default {
+						deny_groups ads
+					}
+					use_policy default
+					list_group ads {
+						source ftp://example.com/ads.txt
+					}
+				}
+			}`,
+			wantErr: `unsupported source scheme`,
+		},
 	}
 
 	for _, tt := range tests {

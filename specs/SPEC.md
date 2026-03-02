@@ -266,6 +266,8 @@ Status: complete (commit `c9107f5`).
 
 ### Milestone 5: Hardening + Benchmarks
 
+Status: in progress (config hardening, matcher + ServeDNS benchmarks, parser/matcher fuzzing added).
+
 1. Benchmark at 100k, 1M entries.
 2. p50/p99 overhead checks.
 3. Fuzzing for list parsers and matchers.
