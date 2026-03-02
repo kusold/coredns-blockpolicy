@@ -20,6 +20,8 @@ type Config struct {
 	Loading    LoadingConfig
 	Matching   MatchingConfig
 
+	// matchingConfigured tracks whether a matching block was explicitly set in
+	// Corefile parsing so zero-values can be distinguished from defaults.
 	matchingConfigured bool
 }
 

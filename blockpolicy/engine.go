@@ -44,6 +44,12 @@ type Engine struct {
 }
 
 func NewEngine(mode blockMode, allow, deny map[string]struct{}) *Engine {
+	if allow == nil {
+		allow = map[string]struct{}{}
+	}
+	if deny == nil {
+		deny = map[string]struct{}{}
+	}
 	return NewEngineWithMatchers(mode, matcherSet{exact: allow}, matcherSet{exact: deny})
 }
 

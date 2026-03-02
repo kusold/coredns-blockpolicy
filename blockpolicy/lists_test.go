@@ -3,6 +3,7 @@ package blockpolicy
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,7 +15,7 @@ import (
 	dto "github.com/prometheus/client_model/go"
 )
 
-func TestParseDomainsWithBlockyAutoParsesDomainAndHosts(t *testing.T) {
+func TestParseEntriesWithBlockyAutoParsesDomainAndHosts(t *testing.T) {
 	t.Parallel()
 	content := `# comment
 ads.example
@@ -24,9 +25,9 @@ ads2.example # inline
 0.0.0.0 tracking2.example # inline
 `
 
-	got := map[string]struct{}{}
-	if err := parseDomainsWithBlocky(context.Background(), "auto", "inline", strings.NewReader(content), got); err != nil {
-		t.Fatalf("parseDomainsWithBlocky failed: %v", err)
+	got, err := parseExactEntriesWithBlocky(context.Background(), "auto", strings.NewReader(content))
+	if err != nil {
+		t.Fatalf("parseExactEntriesWithBlocky failed: %v", err)
 	}
 
 	for _, want := range []string{"ads.example", "tracking.example", "another.example", "ads2.example", "tracking2.example"} {
@@ -51,16 +52,16 @@ func TestSourcePath(t *testing.T) {
 	}
 }
 
-func TestParseDomainsWithBlockyHostsOnly(t *testing.T) {
+func TestParseEntriesWithBlockyHostsOnly(t *testing.T) {
 	t.Parallel()
 
 	content := `ads.example
 0.0.0.0 tracking.example
 127.0.0.1 another.example alias.example
 `
-	got := map[string]struct{}{}
-	if err := parseDomainsWithBlocky(context.Background(), "hosts", "inline", strings.NewReader(content), got); err != nil {
-		t.Fatalf("parseDomainsWithBlocky failed: %v", err)
+	got, err := parseExactEntriesWithBlocky(context.Background(), "hosts", strings.NewReader(content))
+	if err != nil {
+		t.Fatalf("parseExactEntriesWithBlocky failed: %v", err)
 	}
 
 	for _, want := range []string{"tracking.example", "another.example", "alias.example"} {
@@ -73,13 +74,13 @@ func TestParseDomainsWithBlockyHostsOnly(t *testing.T) {
 	}
 }
 
-func TestParseDomainsWithBlockyDomain(t *testing.T) {
+func TestParseEntriesWithBlockyDomain(t *testing.T) {
 	t.Parallel()
 
 	content := "alpha.example\nbeta.example\n"
-	got := map[string]struct{}{}
-	if err := parseDomainsWithBlocky(context.Background(), "domain", "inline", strings.NewReader(content), got); err != nil {
-		t.Fatalf("parseDomainsWithBlocky failed: %v", err)
+	got, err := parseExactEntriesWithBlocky(context.Background(), "domain", strings.NewReader(content))
+	if err != nil {
+		t.Fatalf("parseExactEntriesWithBlocky failed: %v", err)
 	}
 	for _, want := range []string{"alpha.example", "beta.example"} {
 		if _, ok := got[want]; !ok {
@@ -88,14 +89,13 @@ func TestParseDomainsWithBlockyDomain(t *testing.T) {
 	}
 }
 
-func TestParseDomainsWithBlockyRespectsContextCancel(t *testing.T) {
+func TestParseEntriesWithBlockyRespectsContextCancel(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	got := map[string]struct{}{}
-	err := parseDomainsWithBlocky(ctx, "auto", "inline", strings.NewReader("alpha.example\n"), got)
+	_, err := parseExactEntriesWithBlocky(ctx, "auto", strings.NewReader("alpha.example\n"))
 	if err == nil {
 		t.Fatalf("expected context cancellation error")
 	}
@@ -104,7 +104,7 @@ func TestParseDomainsWithBlockyRespectsContextCancel(t *testing.T) {
 	}
 }
 
-func TestLoadExactDomainsWithContext(t *testing.T) {
+func TestLoadMatcherSetsWithContext(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
 
@@ -131,19 +131,19 @@ func TestLoadExactDomainsWithContext(t *testing.T) {
 		},
 	}
 
-	allow, deny, err := loadExactDomainsWithContext(context.Background(), cfg)
+	allow, deny, err := loadMatcherSetsWithContext(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("loadExactDomainsWithContext returned error: %v", err)
+		t.Fatalf("loadMatcherSetsWithContext returned error: %v", err)
 	}
-	if _, ok := allow["allow.example"]; !ok {
+	if _, ok := allow.exact["allow.example"]; !ok {
 		t.Fatalf("allow set missing expected domain")
 	}
-	if _, ok := deny["deny.example"]; !ok {
+	if _, ok := deny.exact["deny.example"]; !ok {
 		t.Fatalf("deny set missing expected domain")
 	}
 }
 
-func TestLoadExactDomainsHTTPSource(t *testing.T) {
+func TestLoadMatcherSetsHTTPSource(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -168,16 +168,16 @@ func TestLoadExactDomainsHTTPSource(t *testing.T) {
 		},
 	}
 
-	_, deny, err := loadExactDomainsWithContext(context.Background(), cfg)
+	_, deny, err := loadMatcherSetsWithContext(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("loadExactDomainsWithContext returned error: %v", err)
+		t.Fatalf("loadMatcherSetsWithContext returned error: %v", err)
 	}
-	if _, ok := deny["deny.example"]; !ok {
+	if _, ok := deny.exact["deny.example"]; !ok {
 		t.Fatalf("deny set missing expected domain from HTTP source")
 	}
 }
 
-func TestLoadExactDomainsHTTPSourceMaxBodySize(t *testing.T) {
+func TestLoadMatcherSetsHTTPSourceMaxBodySize(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -202,12 +202,12 @@ func TestLoadExactDomainsHTTPSourceMaxBodySize(t *testing.T) {
 		},
 	}
 
-	if _, _, err := loadExactDomainsWithContext(context.Background(), cfg); err == nil {
-		t.Fatalf("expected loadExactDomainsWithContext to fail on max_body_size")
+	if _, _, err := loadMatcherSetsWithContext(context.Background(), cfg); err == nil {
+		t.Fatalf("expected loadMatcherSetsWithContext to fail on max_body_size")
 	}
 }
 
-func TestLoadExactDomainsHTTPSourceNoSizeLimit(t *testing.T) {
+func TestLoadMatcherSetsHTTPSourceNoSizeLimit(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -229,16 +229,16 @@ func TestLoadExactDomainsHTTPSourceNoSizeLimit(t *testing.T) {
 		},
 	}
 
-	_, deny, err := loadExactDomainsWithContext(context.Background(), cfg)
+	_, deny, err := loadMatcherSetsWithContext(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("loadExactDomainsWithContext returned error: %v", err)
+		t.Fatalf("loadMatcherSetsWithContext returned error: %v", err)
 	}
-	if _, ok := deny["deny.example"]; !ok {
+	if _, ok := deny.exact["deny.example"]; !ok {
 		t.Fatalf("deny set missing expected domain")
 	}
 }
 
-func TestLoadExactDomainsHTTPSourceStatusError(t *testing.T) {
+func TestLoadMatcherSetsHTTPSourceStatusError(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -259,7 +259,7 @@ func TestLoadExactDomainsHTTPSourceStatusError(t *testing.T) {
 		},
 	}
 
-	_, _, err := loadExactDomainsWithContext(context.Background(), cfg)
+	_, _, err := loadMatcherSetsWithContext(context.Background(), cfg)
 	if err == nil {
 		t.Fatalf("expected status error")
 	}
@@ -268,7 +268,7 @@ func TestLoadExactDomainsHTTPSourceStatusError(t *testing.T) {
 	}
 }
 
-func TestLoadExactDomainsFileURISource(t *testing.T) {
+func TestLoadMatcherSetsFileURISource(t *testing.T) {
 	t.Parallel()
 
 	tmp := t.TempDir()
@@ -289,11 +289,11 @@ func TestLoadExactDomainsFileURISource(t *testing.T) {
 		},
 	}
 
-	_, deny, err := loadExactDomainsWithContext(context.Background(), cfg)
+	_, deny, err := loadMatcherSetsWithContext(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("loadExactDomainsWithContext returned error: %v", err)
+		t.Fatalf("loadMatcherSetsWithContext returned error: %v", err)
 	}
-	if _, ok := deny["deny.example"]; !ok {
+	if _, ok := deny.exact["deny.example"]; !ok {
 		t.Fatalf("deny set missing expected domain from file URI")
 	}
 }
@@ -317,9 +317,9 @@ func TestListEntriesMetricUpdatedFromLoad(t *testing.T) {
 		},
 	}
 
-	_, _, err := loadExactDomainsWithContext(context.Background(), cfg)
+	_, _, err := loadMatcherSetsWithContext(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("loadExactDomainsWithContext returned error: %v", err)
+		t.Fatalf("loadMatcherSetsWithContext returned error: %v", err)
 	}
 
 	m := listEntries.WithLabelValues("default", "deny", "exact")
@@ -399,6 +399,126 @@ func TestRegexParseErrorsAreSkippedAndCounted(t *testing.T) {
 	if d := e.Evaluate("not-a-regex-line.", queryTypeA); d.Action != actionAllow {
 		t.Fatalf("expected invalid regex line to be ignored, got %q", d.Action)
 	}
+}
+
+func TestLoadMatcherSetsSkipsWildcardWhenDisabled(t *testing.T) {
+	t.Parallel()
+
+	denyFile := writeListFile(t, "*.blocked.example")
+	cfg := &Config{
+		PolicyName: "default",
+		Policy: PolicyConfig{
+			DenyGroups: []string{"deny"},
+		},
+		ListGroups: map[string]ListGroupConfig{
+			"deny": {Sources: []string{denyFile}, Format: "wildcard"},
+		},
+		Matching: MatchingConfig{
+			Exact:           true,
+			Wildcard:        false,
+			Regex:           true,
+			HostsFormat:     true,
+			DeepCNAME:       true,
+			ResponseIPLists: true,
+		},
+		matchingConfigured: true,
+	}
+
+	allow, deny, err := loadMatcherSetsWithContext(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("loadMatcherSetsWithContext returned error: %v", err)
+	}
+
+	e := NewEngineWithMatchers(modeZeroIP, allow, deny)
+	if d := e.Evaluate("sub.blocked.example.", queryTypeA); d.Action != actionAllow {
+		t.Fatalf("expected wildcard rule to be ignored when wildcard matching is disabled, got %q", d.Action)
+	}
+}
+
+func TestLoadMatcherSetsSkipsRegexWhenDisabled(t *testing.T) {
+	t.Parallel()
+
+	denyFile := writeListFile(t, "/^ads[0-9]+\\.example$/")
+	cfg := &Config{
+		PolicyName: "default",
+		Policy: PolicyConfig{
+			DenyGroups: []string{"deny"},
+		},
+		ListGroups: map[string]ListGroupConfig{
+			"deny": {Sources: []string{denyFile}, Format: "regex"},
+		},
+		Matching: MatchingConfig{
+			Exact:           true,
+			Wildcard:        true,
+			Regex:           false,
+			HostsFormat:     true,
+			DeepCNAME:       true,
+			ResponseIPLists: true,
+		},
+		matchingConfigured: true,
+	}
+
+	allow, deny, err := loadMatcherSetsWithContext(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("loadMatcherSetsWithContext returned error: %v", err)
+	}
+
+	e := NewEngineWithMatchers(modeZeroIP, allow, deny)
+	if d := e.Evaluate("ads42.example.", queryTypeA); d.Action != actionAllow {
+		t.Fatalf("expected regex rule to be ignored when regex matching is disabled, got %q", d.Action)
+	}
+}
+
+func TestLoadMatcherSetsSkipsExactWhenDisabled(t *testing.T) {
+	t.Parallel()
+
+	denyFile := writeListFile(t, strings.Join([]string{
+		"exact.only.example",
+		"*.wild.only.example",
+		"/^ads[0-9]+\\.only\\.example$/",
+	}, "\n"))
+	cfg := &Config{
+		PolicyName: "default",
+		Policy: PolicyConfig{
+			DenyGroups: []string{"deny"},
+		},
+		ListGroups: map[string]ListGroupConfig{
+			"deny": {Sources: []string{denyFile}, Format: "auto"},
+		},
+		Matching: MatchingConfig{
+			Exact:           false,
+			Wildcard:        true,
+			Regex:           true,
+			HostsFormat:     true,
+			DeepCNAME:       true,
+			ResponseIPLists: true,
+		},
+		matchingConfigured: true,
+	}
+
+	allow, deny, err := loadMatcherSetsWithContext(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("loadMatcherSetsWithContext returned error: %v", err)
+	}
+
+	e := NewEngineWithMatchers(modeZeroIP, allow, deny)
+	if d := e.Evaluate("exact.only.example.", queryTypeA); d.Action != actionAllow {
+		t.Fatalf("expected exact entry to be ignored when exact matching is disabled, got %q", d.Action)
+	}
+	if d := e.Evaluate("sub.wild.only.example.", queryTypeA); d.Action != actionBlock {
+		t.Fatalf("expected wildcard entry to still block, got %q", d.Action)
+	}
+	if d := e.Evaluate("ads9.only.example.", queryTypeA); d.Action != actionBlock {
+		t.Fatalf("expected regex entry to still block, got %q", d.Action)
+	}
+}
+
+func parseExactEntriesWithBlocky(ctx context.Context, format string, reader io.Reader) (map[string]struct{}, error) {
+	builder := newEntryBuilder()
+	if err := parseEntriesWithBlocky(ctx, format, reader, builder, effectiveMatchingConfig(MatchingConfig{}), nil); err != nil {
+		return nil, err
+	}
+	return builder.exact, nil
 }
 
 func writeListFile(t *testing.T, content string) string {

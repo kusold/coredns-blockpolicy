@@ -30,7 +30,7 @@ func TestZeroIPBlocksA(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{PolicyName: "default", Policy: PolicyConfig{Mode: modeZeroIP, TTL: 60 * time.Second}}
 	next := &noopNext{}
-	bp := New(next, cfg, nil, map[string]struct{}{"ads.example": {}})
+	bp := NewWithMatchers(next, cfg, matcherSet{}, matcherSet{exact: map[string]struct{}{"ads.example": {}}})
 
 	req := new(dns.Msg)
 	req.SetQuestion("ads.example.", dns.TypeA)
@@ -62,7 +62,7 @@ func TestAllowlistWins(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{PolicyName: "default", Policy: PolicyConfig{Mode: modeZeroIP, TTL: 60 * time.Second}}
 	next := &noopNext{}
-	bp := New(next, cfg, map[string]struct{}{"ads.example": {}}, map[string]struct{}{"ads.example": {}})
+	bp := NewWithMatchers(next, cfg, matcherSet{exact: map[string]struct{}{"ads.example": {}}}, matcherSet{exact: map[string]struct{}{"ads.example": {}}})
 
 	req := new(dns.Msg)
 	req.SetQuestion("ads.example.", dns.TypeA)
@@ -86,7 +86,7 @@ func TestAllowlistWins(t *testing.T) {
 func TestZeroIPBlocksAAAA(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{PolicyName: "default", Policy: PolicyConfig{Mode: modeZeroIP, TTL: 60 * time.Second}}
-	bp := New(&noopNext{}, cfg, nil, map[string]struct{}{"ads.example": {}})
+	bp := NewWithMatchers(&noopNext{}, cfg, matcherSet{}, matcherSet{exact: map[string]struct{}{"ads.example": {}}})
 
 	req := new(dns.Msg)
 	req.SetQuestion("ads.example.", dns.TypeAAAA)
@@ -114,7 +114,7 @@ func TestZeroIPBlocksAAAA(t *testing.T) {
 func TestZeroIPNonAddressTypeReturnsNXDomain(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{PolicyName: "default", Policy: PolicyConfig{Mode: modeZeroIP, TTL: 60 * time.Second}}
-	bp := New(&noopNext{}, cfg, nil, map[string]struct{}{"ads.example": {}})
+	bp := NewWithMatchers(&noopNext{}, cfg, matcherSet{}, matcherSet{exact: map[string]struct{}{"ads.example": {}}})
 
 	req := new(dns.Msg)
 	req.SetQuestion("ads.example.", dns.TypeTXT)
@@ -132,7 +132,7 @@ func TestZeroIPNonAddressTypeReturnsNXDomain(t *testing.T) {
 func TestNXDomainModeAlwaysNXDomain(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{PolicyName: "default", Policy: PolicyConfig{Mode: modeNXDomain, TTL: 60 * time.Second}}
-	bp := New(&noopNext{}, cfg, nil, map[string]struct{}{"ads.example": {}})
+	bp := NewWithMatchers(&noopNext{}, cfg, matcherSet{}, matcherSet{exact: map[string]struct{}{"ads.example": {}}})
 
 	req := new(dns.Msg)
 	req.SetQuestion("ads.example.", dns.TypeA)
@@ -151,7 +151,7 @@ func TestEmptyQuestionPassesThrough(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{PolicyName: "default", Policy: PolicyConfig{Mode: modeZeroIP, TTL: 60 * time.Second}}
 	next := &noopNext{}
-	bp := New(next, cfg, nil, map[string]struct{}{"ads.example": {}})
+	bp := NewWithMatchers(next, cfg, matcherSet{}, matcherSet{exact: map[string]struct{}{"ads.example": {}}})
 
 	req := new(dns.Msg)
 	w := &captureWriter{}
@@ -169,7 +169,7 @@ func TestUnblockedDomainPassesThrough(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{PolicyName: "default", Policy: PolicyConfig{Mode: modeZeroIP, TTL: 60 * time.Second}}
 	next := &noopNext{}
-	bp := New(next, cfg, nil, map[string]struct{}{"ads.example": {}})
+	bp := NewWithMatchers(next, cfg, matcherSet{}, matcherSet{exact: map[string]struct{}{"ads.example": {}}})
 
 	req := new(dns.Msg)
 	req.SetQuestion("ok.example.", dns.TypeA)
@@ -187,7 +187,7 @@ func TestUnblockedDomainPassesThrough(t *testing.T) {
 func TestBlockResponseInvalidIP(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{PolicyName: "default", Policy: PolicyConfig{Mode: modeZeroIP, TTL: 60 * time.Second}}
-	bp := New(&noopNext{}, cfg, nil, nil)
+	bp := NewWithMatchers(&noopNext{}, cfg, matcherSet{}, matcherSet{})
 
 	req := new(dns.Msg)
 	req.SetQuestion("ads.example.", dns.TypeA)

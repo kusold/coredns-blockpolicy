@@ -21,15 +21,6 @@ import (
 
 var errUnexpectedHTTPStatus = errors.New("unexpected HTTP status code")
 
-func loadExactDomainsWithContext(ctx context.Context, cfg *Config) (map[string]struct{}, map[string]struct{}, error) {
-	loader := newListLoader(cfg)
-	allow, deny, err := loader.load(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	return allow.exact, deny.exact, nil
-}
-
 func loadMatcherSetsWithContext(ctx context.Context, cfg *Config) (matcherSet, matcherSet, error) {
 	loader := newListLoader(cfg)
 	return loader.load(ctx)
@@ -138,17 +129,6 @@ func (l *listLoader) openSource(ctx context.Context, src string) (io.ReadCloser,
 		return nil, err
 	}
 	return os.Open(path)
-}
-
-func parseDomainsWithBlocky(ctx context.Context, format, _ string, reader io.Reader, out map[string]struct{}) error {
-	builder := newEntryBuilder()
-	if err := parseEntriesWithBlocky(ctx, format, reader, builder, effectiveMatchingConfig(MatchingConfig{}), nil); err != nil {
-		return err
-	}
-	for entry := range builder.exact {
-		out[entry] = struct{}{}
-	}
-	return nil
 }
 
 func parseEntriesWithBlocky(
@@ -295,7 +275,7 @@ func normalizeWildcardListEntry(entry string) (string, error) {
 		return "", fmt.Errorf("unsupported wildcard %q: must start with '*.' and contain no other '*'", entry)
 	}
 
-	normalized := strings.TrimLeft(entry, "*")
+	normalized := strings.TrimPrefix(entry, "*")
 	normalized = strings.Trim(normalized, ".")
 	if normalized == "" {
 		return "", fmt.Errorf("unsupported wildcard %q: empty wildcard domain", entry)

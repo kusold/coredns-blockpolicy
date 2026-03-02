@@ -36,10 +36,6 @@ type BlockPolicy struct {
 
 const shutdownWaitTimeout = 5 * time.Second
 
-func New(next plugin.Handler, cfg *Config, allow, deny map[string]struct{}) *BlockPolicy {
-	return NewWithMatchers(next, cfg, matcherSet{exact: allow}, matcherSet{exact: deny})
-}
-
 func NewWithMatchers(next plugin.Handler, cfg *Config, allow, deny matcherSet) *BlockPolicy {
 	b := &BlockPolicy{
 		Next:       next,
