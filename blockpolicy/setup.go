@@ -30,6 +30,8 @@ func setup(c *caddy.Controller) error {
 	}
 	refreshTimestamp.WithLabelValues(cfg.PolicyName).Set(float64(time.Now().Unix()))
 
+	zones := plugin.OriginsFromArgsOrServerBlock(nil, c.ServerBlockKeys)
+
 	var (
 		instancesMu sync.Mutex
 		instances   []*BlockPolicy
@@ -37,6 +39,8 @@ func setup(c *caddy.Controller) error {
 
 	dnsserver.GetConfig(c).AddPlugin(func(next plugin.Handler) plugin.Handler {
 		handler := NewWithMatchers(next, cfg, allow, deny)
+		handler.Zones = zones
+		handler.Fall = cfg.Fall
 		instancesMu.Lock()
 		instances = append(instances, handler)
 		instancesMu.Unlock()
@@ -97,6 +101,7 @@ func parseTopLevelBlock(c *caddy.Controller, cfg *Config) error {
 		seenUsePolicy bool
 		seenLoading   bool
 		seenMatching  bool
+		seenFall      bool
 	)
 
 	for c.Next() {
@@ -166,6 +171,12 @@ func parseTopLevelBlock(c *caddy.Controller, cfg *Config) error {
 			cfg.Matching = matching
 			cfg.matchingConfigured = true
 			seenMatching = true
+		case "fallthrough":
+			if seenFall {
+				return fmt.Errorf("fallthrough may only be declared once")
+			}
+			cfg.Fall.SetZonesFromArgs(c.RemainingArgs())
+			seenFall = true
 		case "logging":
 			return fmt.Errorf("logging block not yet supported")
 		default:

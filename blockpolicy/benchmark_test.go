@@ -249,7 +249,7 @@ func benchmarkServeDNS(b *testing.B, entries int, mode benchmarkServeDNSMode) {
 		},
 		matchingConfigured: true,
 	}
-	bp := NewWithMatchers(mode.next, cfg, matcherSet{}, matcherSet{exact: deny})
+	bp := testBlockPolicy(mode.next, cfg, matcherSet{}, matcherSet{exact: deny})
 
 	req := newDNSRequest(mode.queryName, mode.qtype)
 	writer := &benchmarkResponseWriter{}

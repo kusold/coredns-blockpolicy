@@ -43,7 +43,7 @@ func TestRefreshOnceSwapsSnapshotAndKeepsLastGoodOnFailure(t *testing.T) {
 		},
 	}
 
-	bp := NewWithMatchers(&noopNext{}, cfg, matcherSet{}, matcherSet{exact: map[string]struct{}{"old.example": {}}})
+	bp := testBlockPolicy(&noopNext{}, cfg, matcherSet{}, matcherSet{exact: map[string]struct{}{"old.example": {}}})
 
 	bp.refreshOnce()
 	if got := bp.currentEngine().Evaluate("new.example.", queryTypeA); got.Action != actionBlock {

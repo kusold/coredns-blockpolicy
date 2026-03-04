@@ -5,6 +5,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/coredns/coredns/plugin/pkg/fall"
 )
 
 type blockMode string
@@ -20,6 +22,7 @@ type Config struct {
 	ListGroups map[string]ListGroupConfig
 	Loading    LoadingConfig
 	Matching   MatchingConfig
+	Fall       fall.F
 
 	// matchingConfigured tracks whether a matching block was explicitly set in
 	// Corefile parsing so zero-values can be distinguished from defaults.

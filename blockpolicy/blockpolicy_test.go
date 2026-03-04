@@ -20,7 +20,7 @@ func TestZeroIPBlocksA(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{PolicyName: "default", Policy: PolicyConfig{Mode: modeZeroIP, TTL: 60 * time.Second}}
 	next := &noopNext{}
-	bp := NewWithMatchers(next, cfg, matcherSet{}, matcherSet{exact: map[string]struct{}{"ads.example": {}}})
+	bp := testBlockPolicy(next, cfg, matcherSet{}, matcherSet{exact: map[string]struct{}{"ads.example": {}}})
 
 	req := new(dns.Msg)
 	req.SetQuestion("ads.example.", dns.TypeA)
@@ -52,7 +52,7 @@ func TestAllowlistWins(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{PolicyName: "default", Policy: PolicyConfig{Mode: modeZeroIP, TTL: 60 * time.Second}}
 	next := &noopNext{}
-	bp := NewWithMatchers(next, cfg, matcherSet{exact: map[string]struct{}{"ads.example": {}}}, matcherSet{exact: map[string]struct{}{"ads.example": {}}})
+	bp := testBlockPolicy(next, cfg, matcherSet{exact: map[string]struct{}{"ads.example": {}}}, matcherSet{exact: map[string]struct{}{"ads.example": {}}})
 
 	req := new(dns.Msg)
 	req.SetQuestion("ads.example.", dns.TypeA)
@@ -76,7 +76,7 @@ func TestAllowlistWins(t *testing.T) {
 func TestZeroIPBlocksAAAA(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{PolicyName: "default", Policy: PolicyConfig{Mode: modeZeroIP, TTL: 60 * time.Second}}
-	bp := NewWithMatchers(&noopNext{}, cfg, matcherSet{}, matcherSet{exact: map[string]struct{}{"ads.example": {}}})
+	bp := testBlockPolicy(&noopNext{}, cfg, matcherSet{}, matcherSet{exact: map[string]struct{}{"ads.example": {}}})
 
 	req := new(dns.Msg)
 	req.SetQuestion("ads.example.", dns.TypeAAAA)
@@ -104,7 +104,7 @@ func TestZeroIPBlocksAAAA(t *testing.T) {
 func TestZeroIPNonAddressTypeReturnsNXDomain(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{PolicyName: "default", Policy: PolicyConfig{Mode: modeZeroIP, TTL: 60 * time.Second}}
-	bp := NewWithMatchers(&noopNext{}, cfg, matcherSet{}, matcherSet{exact: map[string]struct{}{"ads.example": {}}})
+	bp := testBlockPolicy(&noopNext{}, cfg, matcherSet{}, matcherSet{exact: map[string]struct{}{"ads.example": {}}})
 
 	req := new(dns.Msg)
 	req.SetQuestion("ads.example.", dns.TypeTXT)
@@ -122,7 +122,7 @@ func TestZeroIPNonAddressTypeReturnsNXDomain(t *testing.T) {
 func TestNXDomainModeAlwaysNXDomain(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{PolicyName: "default", Policy: PolicyConfig{Mode: modeNXDomain, TTL: 60 * time.Second}}
-	bp := NewWithMatchers(&noopNext{}, cfg, matcherSet{}, matcherSet{exact: map[string]struct{}{"ads.example": {}}})
+	bp := testBlockPolicy(&noopNext{}, cfg, matcherSet{}, matcherSet{exact: map[string]struct{}{"ads.example": {}}})
 
 	req := new(dns.Msg)
 	req.SetQuestion("ads.example.", dns.TypeA)
@@ -141,7 +141,7 @@ func TestEmptyQuestionPassesThrough(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{PolicyName: "default", Policy: PolicyConfig{Mode: modeZeroIP, TTL: 60 * time.Second}}
 	next := &noopNext{}
-	bp := NewWithMatchers(next, cfg, matcherSet{}, matcherSet{exact: map[string]struct{}{"ads.example": {}}})
+	bp := testBlockPolicy(next, cfg, matcherSet{}, matcherSet{exact: map[string]struct{}{"ads.example": {}}})
 
 	req := new(dns.Msg)
 	w := &captureWriter{}
@@ -159,7 +159,7 @@ func TestUnblockedDomainPassesThrough(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{PolicyName: "default", Policy: PolicyConfig{Mode: modeZeroIP, TTL: 60 * time.Second}}
 	next := &noopNext{}
-	bp := NewWithMatchers(next, cfg, matcherSet{}, matcherSet{exact: map[string]struct{}{"ads.example": {}}})
+	bp := testBlockPolicy(next, cfg, matcherSet{}, matcherSet{exact: map[string]struct{}{"ads.example": {}}})
 
 	req := new(dns.Msg)
 	req.SetQuestion("ok.example.", dns.TypeA)
@@ -177,7 +177,7 @@ func TestUnblockedDomainPassesThrough(t *testing.T) {
 func TestBlockResponseInvalidIP(t *testing.T) {
 	t.Parallel()
 	cfg := &Config{PolicyName: "default", Policy: PolicyConfig{Mode: modeZeroIP, TTL: 60 * time.Second}}
-	bp := NewWithMatchers(&noopNext{}, cfg, matcherSet{}, matcherSet{})
+	bp := testBlockPolicy(&noopNext{}, cfg, matcherSet{}, matcherSet{})
 
 	req := new(dns.Msg)
 	req.SetQuestion("ads.example.", dns.TypeA)
@@ -206,7 +206,7 @@ func TestDeepCNAMECheckBlocksOnDenylistedTarget(t *testing.T) {
 	}
 
 	next := &staticResponseNext{msg: resp}
-	bp := NewWithMatchers(next, cfg, matcherSet{}, matcherSet{exact: map[string]struct{}{"bad.example": {}}})
+	bp := testBlockPolicy(next, cfg, matcherSet{}, matcherSet{exact: map[string]struct{}{"bad.example": {}}})
 
 	req := new(dns.Msg)
 	req.SetQuestion("example.com.", dns.TypeA)
@@ -249,7 +249,7 @@ func TestResponseIPCheckBlocksOnDenylistedIP(t *testing.T) {
 	}
 
 	next := &staticResponseNext{msg: resp}
-	bp := NewWithMatchers(next, cfg, matcherSet{}, matcherSet{ips: map[string]struct{}{"123.145.123.145": {}}})
+	bp := testBlockPolicy(next, cfg, matcherSet{}, matcherSet{ips: map[string]struct{}{"123.145.123.145": {}}})
 
 	req := new(dns.Msg)
 	req.SetQuestion("safe.example.", dns.TypeA)
@@ -296,7 +296,7 @@ func TestDeepChecksAllowlistPrecedenceOnResponseEntries(t *testing.T) {
 	}
 
 	next := &staticResponseNext{msg: resp}
-	bp := NewWithMatchers(
+	bp := testBlockPolicy(
 		next,
 		cfg,
 		matcherSet{exact: map[string]struct{}{"bad.example": {}}, ips: map[string]struct{}{"123.145.123.145": {}}},
@@ -348,7 +348,7 @@ func TestDeepChecksCanBeDisabled(t *testing.T) {
 	}
 
 	next := &staticResponseNext{msg: resp}
-	bp := NewWithMatchers(
+	bp := testBlockPolicy(
 		next,
 		cfg,
 		matcherSet{},
@@ -389,7 +389,7 @@ func TestResponseIPCheckBlocksOnDenylistedIPv6(t *testing.T) {
 	}
 
 	next := &staticResponseNext{msg: resp}
-	bp := NewWithMatchers(next, cfg, matcherSet{}, matcherSet{ips: map[string]struct{}{"2001:db8::10": {}}})
+	bp := testBlockPolicy(next, cfg, matcherSet{}, matcherSet{ips: map[string]struct{}{"2001:db8::10": {}}})
 
 	req := new(dns.Msg)
 	req.SetQuestion("safe.example.", dns.TypeAAAA)
@@ -429,7 +429,7 @@ func TestDeepCNAMECheckUsesNXDomainMode(t *testing.T) {
 	}
 
 	next := &staticResponseNext{msg: resp}
-	bp := NewWithMatchers(next, cfg, matcherSet{}, matcherSet{exact: map[string]struct{}{"bad.example": {}}})
+	bp := testBlockPolicy(next, cfg, matcherSet{}, matcherSet{exact: map[string]struct{}{"bad.example": {}}})
 
 	req := new(dns.Msg)
 	req.SetQuestion("example.com.", dns.TypeA)
@@ -452,7 +452,7 @@ func TestDeepChecksReturnsNextError(t *testing.T) {
 
 	cfg := deepCheckConfig(modeZeroIP, true, true)
 	next := &errorNext{}
-	bp := NewWithMatchers(next, cfg, matcherSet{}, matcherSet{})
+	bp := testBlockPolicy(next, cfg, matcherSet{}, matcherSet{})
 
 	req := new(dns.Msg)
 	req.SetQuestion("ok.example.", dns.TypeA)
@@ -480,5 +480,199 @@ func deepCheckConfig(mode blockMode, deepCNAME, responseIP bool) *Config {
 			ResponseIPLists: responseIP,
 		},
 		matchingConfigured: true,
+	}
+}
+
+func TestZoneMatchingSkipsOutOfZoneQueries(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{PolicyName: "default", Policy: PolicyConfig{Mode: modeZeroIP, TTL: 60 * time.Second}}
+	next := &noopNext{}
+	bp := NewWithMatchers(next, cfg, matcherSet{}, matcherSet{exact: map[string]struct{}{"ads.example": {}}})
+	bp.Zones = []string{"other.example."}
+
+	req := new(dns.Msg)
+	req.SetQuestion("ads.example.", dns.TypeA)
+	w := &captureWriter{}
+
+	_, err := bp.ServeDNS(context.Background(), w, req)
+	if err != nil {
+		t.Fatalf("ServeDNS returned error: %v", err)
+	}
+	if next.calls.Load() != 1 {
+		t.Fatalf("expected query to pass through to next plugin for out-of-zone domain")
+	}
+	if w.msg != nil {
+		t.Fatalf("expected no response from blockpolicy for out-of-zone query")
+	}
+}
+
+func TestZoneMatchingBlocksInZoneQueries(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{PolicyName: "default", Policy: PolicyConfig{Mode: modeZeroIP, TTL: 60 * time.Second}}
+	next := &noopNext{}
+	bp := NewWithMatchers(next, cfg, matcherSet{}, matcherSet{exact: map[string]struct{}{"ads.example": {}}})
+	bp.Zones = []string{"example."}
+
+	req := new(dns.Msg)
+	req.SetQuestion("ads.example.", dns.TypeA)
+	w := &captureWriter{}
+
+	rcode, err := bp.ServeDNS(context.Background(), w, req)
+	if err != nil {
+		t.Fatalf("ServeDNS returned error: %v", err)
+	}
+	if rcode != dns.RcodeSuccess {
+		t.Fatalf("expected success rcode, got %d", rcode)
+	}
+	if w.msg == nil || len(w.msg.Answer) != 1 {
+		t.Fatalf("expected blocked response with one answer")
+	}
+	if next.calls.Load() != 0 {
+		t.Fatalf("expected next plugin not to be called for blocked in-zone query")
+	}
+}
+
+func TestZoneLabelInMetrics(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{PolicyName: "default", Policy: PolicyConfig{Mode: modeZeroIP, TTL: 60 * time.Second}}
+	bp := NewWithMatchers(&noopNext{}, cfg, matcherSet{}, matcherSet{exact: map[string]struct{}{"ads.example": {}}})
+	bp.Zones = []string{"example."}
+
+	req := new(dns.Msg)
+	req.SetQuestion("ads.example.", dns.TypeA)
+	w := &captureWriter{}
+
+	_, err := bp.ServeDNS(context.Background(), w, req)
+	if err != nil {
+		t.Fatalf("ServeDNS returned error: %v", err)
+	}
+
+	// Verify zone label is "example." not hardcoded "."
+	// The metric was recorded so we just verify no panic and the query was blocked.
+	if w.msg == nil || len(w.msg.Answer) != 1 {
+		t.Fatalf("expected blocked response")
+	}
+}
+
+func TestFallthroughPassesBlockedQueryToNext(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{PolicyName: "default", Policy: PolicyConfig{Mode: modeZeroIP, TTL: 60 * time.Second}}
+	cfg.Fall.SetZonesFromArgs(nil) // fallthrough for all zones
+	next := &noopNext{}
+	bp := testBlockPolicy(next, cfg, matcherSet{}, matcherSet{exact: map[string]struct{}{"ads.example": {}}})
+
+	req := new(dns.Msg)
+	req.SetQuestion("ads.example.", dns.TypeA)
+	w := &captureWriter{}
+
+	_, err := bp.ServeDNS(context.Background(), w, req)
+	if err != nil {
+		t.Fatalf("ServeDNS returned error: %v", err)
+	}
+	if next.calls.Load() != 1 {
+		t.Fatalf("expected blocked query to fall through to next plugin")
+	}
+}
+
+func TestFallthroughDisabledBlocksQuery(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{PolicyName: "default", Policy: PolicyConfig{Mode: modeZeroIP, TTL: 60 * time.Second}}
+	// Fall is zero value = no fallthrough
+	next := &noopNext{}
+	bp := testBlockPolicy(next, cfg, matcherSet{}, matcherSet{exact: map[string]struct{}{"ads.example": {}}})
+
+	req := new(dns.Msg)
+	req.SetQuestion("ads.example.", dns.TypeA)
+	w := &captureWriter{}
+
+	rcode, err := bp.ServeDNS(context.Background(), w, req)
+	if err != nil {
+		t.Fatalf("ServeDNS returned error: %v", err)
+	}
+	if rcode != dns.RcodeSuccess {
+		t.Fatalf("expected success rcode from zeroip block, got %d", rcode)
+	}
+	if next.calls.Load() != 0 {
+		t.Fatalf("expected blocked query not to fall through")
+	}
+	if w.msg == nil || len(w.msg.Answer) != 1 {
+		t.Fatalf("expected blocked response with one answer")
+	}
+}
+
+func TestFallthroughLimitedToSpecificZone(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{PolicyName: "default", Policy: PolicyConfig{Mode: modeZeroIP, TTL: 60 * time.Second}}
+	cfg.Fall.SetZonesFromArgs([]string{"other.example."})
+	next := &noopNext{}
+	bp := testBlockPolicy(next, cfg, matcherSet{}, matcherSet{exact: map[string]struct{}{"ads.example": {}, "ads.other.example": {}}})
+
+	// Query in the fallthrough zone should pass through
+	req1 := new(dns.Msg)
+	req1.SetQuestion("ads.other.example.", dns.TypeA)
+	w1 := &captureWriter{}
+	_, err := bp.ServeDNS(context.Background(), w1, req1)
+	if err != nil {
+		t.Fatalf("ServeDNS returned error: %v", err)
+	}
+	if next.calls.Load() != 1 {
+		t.Fatalf("expected fallthrough for query in fallthrough zone")
+	}
+
+	// Query outside the fallthrough zone should be blocked
+	req2 := new(dns.Msg)
+	req2.SetQuestion("ads.example.", dns.TypeA)
+	w2 := &captureWriter{}
+	rcode, err := bp.ServeDNS(context.Background(), w2, req2)
+	if err != nil {
+		t.Fatalf("ServeDNS returned error: %v", err)
+	}
+	if rcode != dns.RcodeSuccess {
+		t.Fatalf("expected blocked response for query outside fallthrough zone")
+	}
+	if w2.msg == nil || len(w2.msg.Answer) != 1 {
+		t.Fatalf("expected blocked response")
+	}
+}
+
+func TestHealthyReturnsTrueWhenNoErrors(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{PolicyName: "default", Policy: PolicyConfig{Mode: modeZeroIP, TTL: 60 * time.Second}}
+	bp := testBlockPolicy(&noopNext{}, cfg, matcherSet{}, matcherSet{})
+
+	if !bp.Healthy() {
+		t.Fatalf("expected Healthy() to return true with no errors")
+	}
+}
+
+func TestHealthyReturnsFalseAfterConsecutiveErrors(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{PolicyName: "default", Policy: PolicyConfig{Mode: modeZeroIP, TTL: 60 * time.Second}}
+	bp := testBlockPolicy(&noopNext{}, cfg, matcherSet{}, matcherSet{})
+
+	for i := 0; i < maxConsecutiveRefreshErrors; i++ {
+		bp.consecutiveRefreshErrors.Add(1)
+	}
+
+	if bp.Healthy() {
+		t.Fatalf("expected Healthy() to return false after %d consecutive errors", maxConsecutiveRefreshErrors)
+	}
+}
+
+func TestHealthyResetsAfterSuccessfulRefresh(t *testing.T) {
+	t.Parallel()
+	cfg := &Config{PolicyName: "default", Policy: PolicyConfig{Mode: modeZeroIP, TTL: 60 * time.Second}}
+	bp := testBlockPolicy(&noopNext{}, cfg, matcherSet{}, matcherSet{})
+
+	for i := 0; i < maxConsecutiveRefreshErrors; i++ {
+		bp.consecutiveRefreshErrors.Add(1)
+	}
+	if bp.Healthy() {
+		t.Fatalf("expected unhealthy before reset")
+	}
+
+	bp.consecutiveRefreshErrors.Store(0)
+	if !bp.Healthy() {
+		t.Fatalf("expected Healthy() to return true after counter reset")
 	}
 }

@@ -561,6 +561,23 @@ func TestParseConfigErrors(t *testing.T) {
 			}`,
 			wantErr: `unsupported source scheme`,
 		},
+		{
+			name: "duplicate fallthrough",
+			corefile: `.:53 {
+				blockpolicy {
+					policy default {
+						deny_groups ads
+					}
+					use_policy default
+					list_group ads {
+						source /tmp/ads.txt
+					}
+					fallthrough
+					fallthrough
+				}
+			}`,
+			wantErr: `fallthrough may only be declared once`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -576,6 +593,61 @@ func TestParseConfigErrors(t *testing.T) {
 				t.Fatalf("expected error containing %q, got %q", tt.wantErr, err.Error())
 			}
 		})
+	}
+}
+
+func TestParseConfigFallthroughAllZones(t *testing.T) {
+	t.Parallel()
+	corefile := `.:53 {
+		blockpolicy {
+			policy default {
+				deny_groups ads
+			}
+			use_policy default
+			list_group ads {
+				source /tmp/ads.txt
+			}
+			fallthrough
+		}
+	}`
+
+	c := caddy.NewTestController("dns", corefile)
+	cfg, err := parseConfig(c)
+	if err != nil {
+		t.Fatalf("parseConfig failed: %v", err)
+	}
+	// fallthrough with no args should fall through for all zones.
+	// fall.F.Through(qname) returns true for any qname when zones is ["."].
+	if !cfg.Fall.Through("anything.example.") {
+		t.Fatalf("expected fallthrough for all zones")
+	}
+}
+
+func TestParseConfigFallthroughSpecificZone(t *testing.T) {
+	t.Parallel()
+	corefile := `.:53 {
+		blockpolicy {
+			policy default {
+				deny_groups ads
+			}
+			use_policy default
+			list_group ads {
+				source /tmp/ads.txt
+			}
+			fallthrough example.org.
+		}
+	}`
+
+	c := caddy.NewTestController("dns", corefile)
+	cfg, err := parseConfig(c)
+	if err != nil {
+		t.Fatalf("parseConfig failed: %v", err)
+	}
+	if !cfg.Fall.Through("test.example.org.") {
+		t.Fatalf("expected fallthrough for example.org subdomain")
+	}
+	if cfg.Fall.Through("test.example.com.") {
+		t.Fatalf("expected no fallthrough for example.com subdomain")
 	}
 }
 

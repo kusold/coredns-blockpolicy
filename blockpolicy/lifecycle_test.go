@@ -30,7 +30,7 @@ func TestBlockPolicyLifecycleStartStopIdempotent(t *testing.T) {
 		},
 	}
 
-	bp := NewWithMatchers(&noopNext{}, cfg, matcherSet{}, matcherSet{exact: map[string]struct{}{"old.example": {}}})
+	bp := testBlockPolicy(&noopNext{}, cfg, matcherSet{}, matcherSet{exact: map[string]struct{}{"old.example": {}}})
 	if !bp.Ready() {
 		t.Fatalf("expected blockpolicy to report ready with initial engine")
 	}
@@ -76,7 +76,7 @@ func TestBlockPolicyOnShutdownWithoutStartup(t *testing.T) {
 			Mode: modeZeroIP,
 		},
 	}
-	bp := NewWithMatchers(&noopNext{}, cfg, matcherSet{}, matcherSet{})
+	bp := testBlockPolicy(&noopNext{}, cfg, matcherSet{}, matcherSet{})
 	if err := bp.OnShutdown(); err != nil {
 		t.Fatalf("OnShutdown without startup failed: %v", err)
 	}

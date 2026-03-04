@@ -11,11 +11,16 @@ import (
 
 	"github.com/coredns/coredns/plugin"
 	"github.com/coredns/coredns/plugin/metadata"
+	"github.com/coredns/coredns/plugin/pkg/fall"
+	"github.com/coredns/coredns/request"
 	"github.com/miekg/dns"
 )
 
 type BlockPolicy struct {
 	Next plugin.Handler
+
+	Zones []string
+	Fall  fall.F
 
 	policyName string
 	ttl        uint32
@@ -27,6 +32,9 @@ type BlockPolicy struct {
 
 	loader        *listLoader
 	refreshPeriod time.Duration
+
+	// consecutiveRefreshErrors tracks sequential refresh failures for health reporting.
+	consecutiveRefreshErrors atomic.Int64
 
 	startOnce sync.Once
 	stopOnce  sync.Once
@@ -46,6 +54,7 @@ func NewWithMatchers(next plugin.Handler, cfg *Config, allow, deny matcherSet) *
 
 	b := &BlockPolicy{
 		Next:       next,
+		Fall:       cfg.Fall,
 		policyName: cfg.PolicyName,
 		ttl:        uint32(cfg.Policy.TTL.Seconds()),
 		mode:       cfg.Policy.Mode,
@@ -69,6 +78,17 @@ func (b *BlockPolicy) Name() string {
 
 func (b *BlockPolicy) Ready() bool {
 	return b.engine.Load() != nil
+}
+
+// maxConsecutiveRefreshErrors is the threshold after which the plugin reports
+// itself as unhealthy. The last-good snapshot continues serving queries.
+const maxConsecutiveRefreshErrors = 3
+
+// Healthy reports whether the plugin is operating normally. It returns false
+// when the background refresh loop has failed maxConsecutiveRefreshErrors times
+// in a row, indicating a persistent problem with list sources.
+func (b *BlockPolicy) Healthy() bool {
+	return b.consecutiveRefreshErrors.Load() < int64(maxConsecutiveRefreshErrors)
 }
 
 func (b *BlockPolicy) OnStartup() error {
@@ -103,7 +123,14 @@ func (b *BlockPolicy) OnShutdown() error {
 }
 
 func (b *BlockPolicy) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
-	labels := labelValues(ctx, b.policyName, w)
+	state := request.Request{W: w, Req: r}
+
+	zone := plugin.Zones(b.Zones).Matches(state.Name())
+	if zone == "" {
+		return plugin.NextOrFailure(b.Name(), b.Next, ctx, w, r)
+	}
+
+	labels := labelValues(ctx, b.policyName, zone, w)
 
 	if len(r.Question) == 0 {
 		queriesTotal.WithLabelValues(labels.server, labels.zone, labels.view, labels.policy, "none").Inc()
@@ -139,6 +166,10 @@ func (b *BlockPolicy) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns
 			return rcode, nil
 		}
 		return b.writeBlocked(ctx, w, r, labels, finalDecision)
+	}
+
+	if b.Fall.Through(state.Name()) {
+		return plugin.NextOrFailure(b.Name(), b.Next, ctx, w, r)
 	}
 
 	return b.writeBlocked(ctx, w, r, labels, decision)
@@ -316,12 +347,14 @@ func (b *BlockPolicy) refreshOnce() {
 
 	allow, deny, err := b.loader.load(context.Background())
 	if err != nil {
+		b.consecutiveRefreshErrors.Add(1)
 		refreshTotal.WithLabelValues(b.policyName, "error").Inc()
 		errorsTotal.WithLabelValues("refresh", "load").Inc()
 		log.Errorf("list refresh failed for policy %q: %v", b.policyName, err)
 		return
 	}
 
+	b.consecutiveRefreshErrors.Store(0)
 	b.engine.Store(NewEngineWithMatchers(b.mode, allow, deny))
 	refreshTotal.WithLabelValues(b.policyName, "success").Inc()
 	refreshTimestamp.WithLabelValues(b.policyName).Set(float64(time.Now().Unix()))
@@ -372,8 +405,7 @@ type metricLabels struct {
 	policy string
 }
 
-func labelValues(ctx context.Context, policy string, w dns.ResponseWriter) metricLabels {
-	zone := "."
+func labelValues(ctx context.Context, policy, zone string, w dns.ResponseWriter) metricLabels {
 	view := "default"
 	if vf := metadata.ValueFunc(ctx, "view/name"); vf != nil {
 		if v := vf(); v != "" {

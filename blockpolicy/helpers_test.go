@@ -10,6 +10,15 @@ import (
 	"github.com/miekg/dns"
 )
 
+// testBlockPolicy creates a BlockPolicy via NewWithMatchers with Zones set to
+// the root zone (".") so all queries match. Tests that need specific zone
+// behavior should override Zones after calling this.
+func testBlockPolicy(next plugin.Handler, cfg *Config, allow, deny matcherSet) *BlockPolicy {
+	bp := NewWithMatchers(next, cfg, allow, deny)
+	bp.Zones = []string{"."}
+	return bp
+}
+
 type noopNext struct {
 	calls atomic.Int32
 }
