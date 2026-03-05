@@ -1,4 +1,4 @@
-module github.com/kusold/coredns-blocklist
+module github.com/kusold/coredns-blockpolicy
 
 go 1.25.0
 

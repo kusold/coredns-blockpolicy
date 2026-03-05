@@ -20,7 +20,7 @@ import (
 	_ "github.com/coredns/coredns/plugin/metrics"
 
 	// Register our plugin.
-	_ "github.com/kusold/coredns-blocklist/blockpolicy"
+	_ "github.com/kusold/coredns-blockpolicy/blockpolicy"
 )
 
 func init() {
