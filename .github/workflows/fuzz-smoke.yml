@@ -36,3 +36,14 @@ jobs:
 
       - name: Fuzz engine smoke
         run: go test ./blockpolicy -run=^$ -fuzz=FuzzEngineEvaluate -fuzztime=5s
+
+  required:
+    name: Fuzz Smoke Required
+    runs-on: ubuntu-latest
+    if: ${{ always() }}
+    needs:
+      - fuzz
+    steps:
+      - name: Verify fuzz job succeeded
+        run: |
+          [ "${{ needs.fuzz.result }}" = "success" ] || exit 1
