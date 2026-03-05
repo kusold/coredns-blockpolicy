@@ -63,7 +63,7 @@ jobs:
         run: go test -race -count=1 ./...
 
   required:
-    name: CI Required
+    name: CI / Race, Vet, Test
     runs-on: ubuntu-latest
     if: ${{ always() }}
     needs:
