@@ -1,0 +1,14 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+    labels:
+      - dependencies
+    commit-message:
+      prefix: deps
+    # Keep regular version updates limited to CoreDNS/Blocky deps.
+    allow:
+      - dependency-name: github.com/coredns/coredns
+      - dependency-name: github.com/0xERR0R/blocky

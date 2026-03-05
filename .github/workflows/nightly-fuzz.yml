@@ -1,0 +1,45 @@
+name: Nightly Fuzz
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-fuzz
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    name: Nightly fuzz (Go 1.25.x)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+          cache: true
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Fuzz parse nightly
+        run: go test ./blockpolicy -run=^$ -fuzz=FuzzParseEntriesWithBlocky -fuzztime=10m
+
+      - name: Fuzz engine nightly
+        run: go test ./blockpolicy -run=^$ -fuzz=FuzzEngineEvaluate -fuzztime=10m
+
+      - name: Upload fuzz artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-fuzz-artifacts
+          path: blockpolicy/testdata/fuzz
+          if-no-files-found: ignore
