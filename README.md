@@ -88,7 +88,7 @@ blockpolicy {
 *blockpolicy* should run after `metadata` and `cache`, but before `forward` and other resolver plugins. Add this line to CoreDNS's `plugin.cfg` between `cache` and `rewrite`:
 
 ```
-blockpolicy:github.com/kusold/coredns-blocklist/blockpolicy
+blockpolicy:github.com/kusold/coredns-blockpolicy/blockpolicy
 ```
 
 Example ordering context:
@@ -100,7 +100,7 @@ tls:tls
 reload:reload
 ...
 cache:cache
-blockpolicy:github.com/kusold/coredns-blocklist/blockpolicy
+blockpolicy:github.com/kusold/coredns-blockpolicy/blockpolicy
 rewrite:rewrite
 ...
 forward:forward
