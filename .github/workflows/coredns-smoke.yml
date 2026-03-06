@@ -1,0 +1,190 @@
+name: CoreDNS Smoke
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coredns-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: Build CoreDNS + Plugin Smoke (Go 1.25.x)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+          cache: true
+
+      - name: Build CoreDNS with blockpolicy plugin
+        run: |
+          set -euo pipefail
+
+          COREDNS_VERSION="$(go list -m -f '{{.Version}}' github.com/coredns/coredns)"
+          echo "Using CoreDNS ${COREDNS_VERSION}"
+
+          git clone --depth 1 --branch "${COREDNS_VERSION}" https://github.com/coredns/coredns.git /tmp/coredns-smoke
+          cd /tmp/coredns-smoke
+
+          if ! grep -Fxq "blockpolicy:github.com/kusold/coredns-blockpolicy/blockpolicy" plugin.cfg; then
+            awk '
+              BEGIN { inserted=0 }
+              /^rewrite:rewrite$/ && !inserted {
+                print "blockpolicy:github.com/kusold/coredns-blockpolicy/blockpolicy"
+                inserted=1
+              }
+              { print }
+              END {
+                if (!inserted) {
+                  print "failed to insert blockpolicy before rewrite" > "/dev/stderr"
+                  exit 1
+                }
+              }
+            ' plugin.cfg > plugin.cfg.new
+            mv plugin.cfg.new plugin.cfg
+          fi
+
+          go mod edit -replace github.com/kusold/coredns-blockpolicy="${GITHUB_WORKSPACE}"
+          go generate
+          go mod tidy
+          go build -o ./coredns
+
+      - name: "Smoke test: load blocklist and verify live blocking"
+        run: |
+          set -euo pipefail
+          cd /tmp/coredns-smoke
+
+          cat > ./smoke-blocklist.txt <<'EOF'
+          malware.example.com
+          EOF
+
+          cat > ./smoke-hosts.txt <<'EOF'
+          9.9.9.9 allowed.example.com
+          EOF
+
+          cat > ./Corefile.smoke <<'EOF'
+          .:1053 {
+              blockpolicy {
+                  policy smoke {
+                      deny_groups deny
+                      block_mode zeroip
+                      ttl 60s
+                  }
+                  use_policy smoke
+
+                  list_group deny {
+                      source ./smoke-blocklist.txt
+                      format domain
+                  }
+              }
+
+              hosts ./smoke-hosts.txt {
+                  fallthrough
+              }
+          }
+          EOF
+
+          cat > ./smoke_query.go <<'EOF'
+          package main
+
+          import (
+          	"fmt"
+          	"os"
+
+          	"github.com/miekg/dns"
+          )
+
+          func main() {
+          	if len(os.Args) != 4 {
+          		fmt.Fprintf(os.Stderr, "usage: %s <server:port> <name> <type>\n", os.Args[0])
+          		os.Exit(2)
+          	}
+
+          	qtype := dns.TypeA
+          	switch os.Args[3] {
+          	case "A":
+          		qtype = dns.TypeA
+          	case "AAAA":
+          		qtype = dns.TypeAAAA
+          	default:
+          		fmt.Fprintf(os.Stderr, "unsupported query type: %s\n", os.Args[3])
+          		os.Exit(2)
+          	}
+
+          	m := new(dns.Msg)
+          	m.SetQuestion(dns.Fqdn(os.Args[2]), qtype)
+          	r, _, err := new(dns.Client).Exchange(m, os.Args[1])
+          	if err != nil {
+          		fmt.Fprintf(os.Stderr, "query failed: %v\n", err)
+          		os.Exit(1)
+          	}
+
+          	fmt.Printf("rcode=%s\n", dns.RcodeToString[r.Rcode])
+          	for _, ans := range r.Answer {
+          		switch rr := ans.(type) {
+          		case *dns.A:
+          			fmt.Printf("a=%s\n", rr.A.String())
+          		case *dns.AAAA:
+          			fmt.Printf("aaaa=%s\n", rr.AAAA.String())
+          		}
+          	}
+          }
+          EOF
+
+          go build -o ./smoke-query ./smoke_query.go
+
+          ./coredns -conf ./Corefile.smoke > ./coredns-smoke.log 2>&1 &
+          coredns_pid=$!
+
+          cleanup() {
+            kill "${coredns_pid}" >/dev/null 2>&1 || true
+            wait "${coredns_pid}" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          for _ in $(seq 1 40); do
+            if ./smoke-query 127.0.0.1:1053 malware.example.com A | grep -Fxq "a=0.0.0.0"; then
+              break
+            fi
+            sleep 0.25
+          done
+
+          blocked="$(./smoke-query 127.0.0.1:1053 malware.example.com A)"
+          echo "${blocked}"
+          echo "${blocked}" | grep -Fxq "rcode=NOERROR"
+          echo "${blocked}" | grep -Fxq "a=0.0.0.0"
+
+          allowed="$(./smoke-query 127.0.0.1:1053 allowed.example.com A)"
+          echo "${allowed}"
+          echo "${allowed}" | grep -Fxq "rcode=NOERROR"
+          echo "${allowed}" | grep -Fxq "a=9.9.9.9"
+
+      - name: Dump CoreDNS log on failure
+        if: failure()
+        run: |
+          if [ -f /tmp/coredns-smoke/coredns-smoke.log ]; then
+            cat /tmp/coredns-smoke/coredns-smoke.log
+          fi
+
+  required:
+    name: CoreDNS Smoke Required
+    runs-on: ubuntu-latest
+    if: ${{ always() }}
+    needs:
+      - smoke
+    steps:
+      - name: Verify smoke job succeeded
+        run: |
+          [ "${{ needs.smoke.result }}" = "success" ] || exit 1
