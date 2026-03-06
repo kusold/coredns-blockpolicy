@@ -61,7 +61,7 @@ jobs:
           go mod tidy
           go build -o ./coredns
 
-      - name: Smoke test: load blocklist and verify live blocking
+      - name: "Smoke test: load blocklist and verify live blocking"
         run: |
           set -euo pipefail
           cd /tmp/coredns-smoke
