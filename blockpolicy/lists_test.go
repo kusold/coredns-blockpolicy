@@ -300,6 +300,12 @@ func TestLoadMatcherSetsFileURISource(t *testing.T) {
 
 func TestListEntriesMetricUpdatedFromLoad(t *testing.T) {
 	t.Parallel()
+
+	// listEntries is a package-global gauge keyed by (policy, group, kind). Many
+	// parallel tests load a "deny" group under policy "default" and thus write the
+	// same gauge child; whichever finishes last wins the value. Use a policy name
+	// unique to this test so its gauge can't be clobbered mid-assertion.
+	policy := t.Name()
 	tmp := t.TempDir()
 
 	denyFile := filepath.Join(tmp, "deny.txt")
@@ -308,7 +314,7 @@ func TestListEntriesMetricUpdatedFromLoad(t *testing.T) {
 	}
 
 	cfg := &Config{
-		PolicyName: "default",
+		PolicyName: policy,
 		Policy: PolicyConfig{
 			DenyGroups: []string{"deny"},
 		},
@@ -322,9 +328,9 @@ func TestListEntriesMetricUpdatedFromLoad(t *testing.T) {
 		t.Fatalf("loadMatcherSetsWithContext returned error: %v", err)
 	}
 
-	m := listEntries.WithLabelValues("default", "deny", "exact")
-	if got := metricGaugeValue(t, m); got < 2 {
-		t.Fatalf("expected list_entries >= 2, got %v", got)
+	m := listEntries.WithLabelValues(policy, "deny", "exact")
+	if got := metricGaugeValue(t, m); got != 2 {
+		t.Fatalf("expected list_entries for %q exact = 2, got %v", policy, got)
 	}
 }
 
