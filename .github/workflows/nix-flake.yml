@@ -1,0 +1,81 @@
+name: Nix Flake
+
+# Verifies that CoreDNS can be built as a Nix flake with the blockpolicy plugin
+# wired in from the *local* checkout (i.e. the current commit), using nixpkgs'
+# `coredns` package. See flake.nix for how the plugin is sourced.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nix-flake-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build CoreDNS via Nix flake
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build coredns with the blockpolicy plugin
+        run: |
+          set -uo pipefail
+          build_log="$RUNNER_TEMP/nix-build.log"
+
+          # Fast path: the committed vendorHash still matches, so the build
+          # succeeds right away.
+          if nix build .#coredns --out-link coredns-result 2>&1 | tee "$build_log"; then
+            echo "✓ coredns built with the committed vendorHash"
+          else
+            # Slow path: a dependency changed and the committed vendorHash is stale.
+            # nix prints the correct hash in the mismatch message — extract it,
+            # update the flake, and rebuild. This keeps dependency bumps (e.g.
+            # dependabot) from failing the gate on a stale hash value.
+            new_hash="$(grep -E 'got:.*sha256-' "$build_log" | grep -Eo 'sha256-[A-Za-z0-9+/=]+' | head -n1 || true)"
+            if [ -z "${new_hash:-}" ]; then
+              echo "::error::Build failed for a reason other than a vendorHash mismatch (see log above)."
+              exit 1
+            fi
+            echo "Stale vendorHash detected; updating flake.nix to ${new_hash} and rebuilding…"
+            sed -i "s|vendorHash = \"sha256-[A-Za-z0-9+/=]*\";|vendorHash = \"${new_hash}\";|" flake.nix
+            nix build .#coredns --out-link coredns-result 2>&1 | tee "$build_log" || {
+              echo "::error::Rebuild failed after vendorHash update (see log above)."
+              exit 1
+            }
+          fi
+
+          echo "COREDNS_BIN=$(pwd)/coredns-result/bin/coredns" >> "$GITHUB_ENV"
+
+      - name: Smoke test the built binary
+        run: |
+          set -euo pipefail
+          "${COREDNS_BIN}" -version
+          # Confirm the blockpolicy plugin was actually compiled in.
+          "${COREDNS_BIN}" -plugins | grep --fixed-strings --line-regexp blockpolicy
+
+  required:
+    name: Nix Flake Required
+    runs-on: ubuntu-latest
+    if: ${{ always() }}
+    needs:
+      - build
+    steps:
+      - name: Verify build job succeeded
+        run: |
+          [ "${{ needs.build.result }}" = "success" ] || exit 1
