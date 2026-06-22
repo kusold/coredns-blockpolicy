@@ -1,0 +1,88 @@
+# CodeQL code-scanning workflow.
+#
+# This is the single source of truth for CodeQL analysis in this repo; it
+# supersedes the former `codeql` job in security.yml. It runs on push to main,
+# on pull requests (same-repo, non-Dependabot only — fork/Dependabot PRs cannot
+# upload SARIF results), and on a weekly schedule.
+name: CodeQL
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  schedule:
+    - cron: '45 15 * * 3'
+
+permissions:
+  contents: read
+
+# Cancel superseded runs (this repo's convention for every workflow).
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    # Skip pull requests that cannot upload SARIF results: forks and Dependabot
+    # PRs both run with a read-only GITHUB_TOKEN, so analyzing them only wastes
+    # CI minutes. (Non-PR events — push, schedule — always run.)
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      # required to upload code-scanning results
+      security-events: write
+      # required for pull-request differential analysis
+      pull-requests: read
+      # only required for workflows in private repositories
+      actions: read
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - language: actions
+          build-mode: none
+        - language: go
+          build-mode: autobuild
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+        cache: true
+
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v4
+      with:
+        languages: ${{ matrix.language }}
+        build-mode: ${{ matrix.build-mode }}
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v4
+      with:
+        category: "/language:${{ matrix.language }}"
+
+  # Aggregator required-check, mirroring the pattern in ci.yml / coredns-smoke.yml.
+  # Always reports, so it can be a required status check without blocking
+  # fork/Dependabot PRs (where `analyze` is skipped).
+  required:
+    name: CodeQL Required
+    runs-on: ubuntu-latest
+    if: ${{ always() }}
+    needs: analyze
+    steps:
+      - name: Verify CodeQL analysis succeeded
+        run: |
+          result="${{ needs.analyze.result }}"
+          [ "$result" = "success" ] || [ "$result" = "skipped" ] || exit 1
