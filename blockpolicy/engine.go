@@ -101,8 +101,10 @@ func (s matcherSet) matches(name string) bool {
 			return true
 		}
 	}
-	if s.wildcard != nil && !s.wildcard.IsEmpty() && s.wildcard.HasParentOf(name) {
-		return true
+	if s.wildcard != nil && !s.wildcard.IsEmpty() {
+		if _, matched := s.wildcard.HasParentOf(name); matched {
+			return true
+		}
 	}
 	for _, re := range s.regex {
 		if re.MatchString(name) {
