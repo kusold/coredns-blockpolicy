@@ -36,7 +36,7 @@
               externalPlugins = [ ];
               # Hash of the vendored coredns+blockpolicy modules. When dependencies
               # change, `nix build` prints the correct value on mismatch.
-              vendorHash = "sha256-QmuEhrfQ10hIy9WcYKaIzZSbxrYsuN1Pa/G1bKLQYqI=";
+              vendorHash = "sha256-b1sZqyJNU7FfXDAvRGQVNhsnnWy2jHayPC2FeMz4Mfw=";
             }).overrideAttrs (
               previousAttrs:
               {
