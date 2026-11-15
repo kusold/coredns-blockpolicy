@@ -21,7 +21,7 @@
         "github.com/0xERR0R/blocky"
       ],
       "enabled": true,
-      "schedule": ["every week"]
+      "schedule": ["before 5am on monday"]
     }
   ]
 }
