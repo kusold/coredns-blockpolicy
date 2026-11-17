@@ -41,7 +41,7 @@ jobs:
           go test -run=^$ -bench=. -benchmem -benchtime="${{ github.event.inputs.bench_time }}" -count="${{ github.event.inputs.bench_count }}" ./blockpolicy | tee bench.txt
 
       - name: Upload benchmark artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: benchmark-results
           path: bench.txt
