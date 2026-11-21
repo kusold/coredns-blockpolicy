@@ -3,7 +3,7 @@ module github.com/kusold/coredns-blockpolicy
 go 1.26.2
 
 require (
-	github.com/0xERR0R/blocky v0.32.0
+	github.com/0xERR0R/blocky v0.37.0
 	github.com/coredns/caddy v1.1.4
 	github.com/coredns/coredns v1.15.0
 	github.com/miekg/dns v1.1.73
